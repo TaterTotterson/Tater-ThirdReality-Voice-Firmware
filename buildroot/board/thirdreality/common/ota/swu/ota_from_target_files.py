@@ -176,7 +176,6 @@ def WriteIncrementalOTAPackage(new_zip, old_zip, output_rootfs_tgz, output_dir):
         'update.sh',
         'sw-description',
         'increment.sh',
-        'swupdate-priv.pem',
         'u-boot.bin',
         'u-boot.bin.usb.bl2',
         'u-boot.bin.usb.tpl'

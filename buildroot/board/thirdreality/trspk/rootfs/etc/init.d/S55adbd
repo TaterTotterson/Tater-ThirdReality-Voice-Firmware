@@ -13,10 +13,9 @@
 # UDC name and ConfigFS paths come from the board DTS (dwc2_a @ ff400000,
 # port-type = slave) and the Amlogic BSP (aml-commonlib usb_monitor).
 #
-# SECURITY: ro.adb.secure defaults to 0 and adbd keeps root privileges in
-# this build, so anyone with USB access -- or network access when the TCP
-# port below is enabled -- gets an unauthenticated root shell. Intended for
-# development images only.
+# SECURITY: adbd is disabled by default and is not included in production
+# defconfigs. A development image must explicitly set ADB_ENABLED=1 in
+# /etc/default/adbd. TCP remains disabled unless a port is also supplied.
 
 DAEMON=/usr/bin/adbd
 NAME=adbd
@@ -47,9 +46,10 @@ PRODUCT="Voice Music Assistant"
 # WARNING: the TCP socket binds to 0.0.0.0 and adbd runs as root with
 # ro.adb.secure=0, so anyone on the network gets an unauthenticated root
 # shell. Keep this to development images only.
-ADB_TCP_PORT=5555
+ADB_ENABLED=0
+ADB_TCP_PORT=
 
-# Allow overriding ADB_TCP_PORT / UDC_NAME without editing this file.
+# Allow development images to opt in without editing this file.
 [ -r /etc/default/adbd ] && . /etc/default/adbd
 
 serialnumber() {
@@ -130,6 +130,11 @@ bind_udc() {
 
 start() {
 	printf "Starting %s: " "$NAME"
+
+	if [ "$ADB_ENABLED" != "1" ]; then
+		echo "SKIP (disabled)"
+		return 0
+	fi
 
 	if [ ! -x $DAEMON ]; then
 		echo "SKIP (no $DAEMON)"

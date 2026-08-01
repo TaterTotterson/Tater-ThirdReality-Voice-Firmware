@@ -4,6 +4,11 @@
 /*.diff
 /*.patch
 /TODO.txt
+/.secrets/
+__pycache__/
+*.py[cod]
+/buildroot/board/thirdreality/common/ota/swu/swupdate-priv.pem
+/buildroot/board/thirdreality/common/rootfs/etc/swupdate-public.pem
 /*.vscode
 /*.github
 !/.github/

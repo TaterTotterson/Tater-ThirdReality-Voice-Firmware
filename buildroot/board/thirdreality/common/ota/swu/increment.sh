@@ -31,7 +31,9 @@ for i in $HASH_FILES;do
 done
 
 #Generating signature
-openssl dgst -sha256 -sign swupdate-priv.pem sw-description > sw-description.sig
+SIGNING_KEY="${TATER_SWUPDATE_PRIVATE_KEY_FILE:-swupdate-priv.pem}"
+[ -r "$SIGNING_KEY" ] || { echo "Missing SWUpdate signing key: $SIGNING_KEY" >&2; exit 1; }
+openssl dgst -sha256 -sign "$SIGNING_KEY" sw-description > sw-description.sig
 
 #create software.swu
 for i in $FILES;do

@@ -1,6 +1,9 @@
 name: Build Firmware
 
 on:
+  push:
+    branches: [main]
+  pull_request:
   workflow_dispatch:
     inputs:
       version:
@@ -9,9 +12,44 @@ on:
         type: string
 
 jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate firmware structure
+        run: python3 script/validate_firmware.py
+
+      - name: Run bridge unit tests
+        run: python3 -m unittest discover -s tests -v
+
+      - name: Validate scripts
+        run: |
+          bash -n go
+          bash -n script/prepare_ota_keys.sh
+          bash -n script/generate_development_ota_key.sh
+          bash -n script/update_tater_linux_source.sh
+          sh -n buildroot/package/thirdreality/tater-linux-satellite/files/tater-satellite-launcher
+          sh -n buildroot/package/thirdreality/tater-linux-satellite/files/tater-configure
+          sh -n buildroot/package/thirdreality/tr-proj-ha-speaker/script/S99ha-speaker
+
+      - name: Resolve Buildroot configuration
+        run: |
+          mkdir -p /tmp/tater-buildroot-config
+          cp buildroot/configs/3reality_trspk_defconfig /tmp/tater-buildroot-config/.config
+          make -C buildroot O=/tmp/tater-buildroot-config olddefconfig
+          grep -q '^BR2_PACKAGE_TATER_LINUX_SATELLITE=y$' /tmp/tater-buildroot-config/.config
+          grep -q '^# BR2_PACKAGE_DROPBEAR is not set$' /tmp/tater-buildroot-config/.config
+          ! grep -q '^BR2_PACKAGE_ANDROID_TOOLS5_ADBD=y$' /tmp/tater-buildroot-config/.config
+
   build:
+    needs: validate
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 360
+    env:
+      TATER_SWUPDATE_PRIVATE_KEY_PEM: ${{ secrets.TATER_SWUPDATE_PRIVATE_KEY_PEM }}
 
     steps:
       - name: Free up disk space
@@ -39,19 +77,25 @@ jobs:
           mkdir -p buildroot/dl
 
       - name: Build Docker image
-        run: docker build -t voice-music-assistant-builder .
+        run: docker build --platform linux/amd64 -t voice-music-assistant-builder .
 
       - name: Build firmware
         run: |
+          if [ -z "$TATER_SWUPDATE_PRIVATE_KEY_PEM" ]; then
+            echo "Missing repository secret TATER_SWUPDATE_PRIVATE_KEY_PEM" >&2
+            exit 1
+          fi
           VERSION="${{ github.event.inputs.version }}"
           ARGS="trspk"
           if [ -n "$VERSION" ]; then
             ARGS="trspk $VERSION"
           fi
           docker run --rm \
+            --platform linux/amd64 \
             -u "$(id -u):$(id -g)" \
             -v "$PWD:/build" \
             -e "HOME=/build" \
+            -e "TATER_SWUPDATE_PRIVATE_KEY_PEM" \
             voice-music-assistant-builder $ARGS
 
       - name: Upload firmware artifacts

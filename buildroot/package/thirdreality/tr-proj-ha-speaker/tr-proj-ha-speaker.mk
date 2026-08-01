@@ -9,6 +9,7 @@ TR_PROJ_HA_SPEAKER_SITE = $(TOPDIR)/package/thirdreality/tr-proj-ha-speaker
 TR_PROJ_HA_SPEAKER_SITE_METHOD = local
 
 TR_PROJ_HA_SPEAKER_INSTALL_TARGET = YES
+TR_PROJ_HA_SPEAKER_DEPENDENCIES = tater-linux-satellite
 
 REALITY_DIR = $(TARGET_DIR)/usr/share/thirdreality
 

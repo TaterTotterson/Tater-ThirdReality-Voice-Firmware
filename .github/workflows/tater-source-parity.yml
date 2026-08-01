@@ -1,0 +1,14 @@
+name: Tater Linux Source Parity
+
+on:
+  schedule:
+    - cron: "17 13 * * 1"
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check pinned Tater Linux revision
+        run: ./script/update_tater_linux_source.sh --check

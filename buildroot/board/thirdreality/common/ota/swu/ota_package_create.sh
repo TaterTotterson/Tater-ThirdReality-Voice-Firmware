@@ -19,7 +19,6 @@ tar -C $OTA_SRC_PATH -czf $TARGET_OTA_NAME/rootfs.tgz .
 cp sw-description-increment $TARGET_OTA_NAME/sw-description
 
 cp increment_update.sh $TARGET_OTA_NAME/update.sh
-cp swupdate-priv.pem  $TARGET_OTA_NAME
 cp increment.sh  $TARGET_OTA_NAME
 
 cd $TARGET_OTA_NAME
@@ -35,8 +34,11 @@ for i in $HASH_FILES;do
 	sed -i "/filename = \"$i\";/a\\\t\t\t$key_value"  sw-description;
 done
 
-openssl dgst -sha256 -sign swupdate-priv.pem sw-description > sw-description.sig
+SIGNING_KEY="${TATER_SWUPDATE_PRIVATE_KEY_FILE:-swupdate-priv.pem}"
+[ -r "$SIGNING_KEY" ] || { echo "Missing SWUpdate signing key: $SIGNING_KEY" >&2; exit 1; }
+openssl dgst -sha256 -sign "$SIGNING_KEY" sw-description > sw-description.sig
 for i in $FILES;do
 	echo $i;done | cpio -ov -H crc >  software.swu
 echo software.swu  | cpio -ov -H crc >  ${PRODUCT_NAME}_${CONTAINER_VER}.swu
+rm -f swupdate-priv.pem
 #cd -

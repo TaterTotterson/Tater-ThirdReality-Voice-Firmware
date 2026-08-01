@@ -1,0 +1,87 @@
+#!/bin/sh
+set -eu
+
+CONFIG=/data/conf/tater.json
+DEFAULT_CONFIG=/usr/share/tater/defaults/tater.json
+DEVICE_CONFIG=/data/conf/device.json
+TOKEN_FILE=/data/conf/tater-device-token
+PREFERENCES_FILE=/data/conf/tater-preferences.json
+DOWNLOAD_DIR=/data/tater
+
+mkdir -p /data/conf "$DOWNLOAD_DIR"
+if [ ! -s "$CONFIG" ] || ! jq empty "$CONFIG" >/dev/null 2>&1; then
+    cp "$DEFAULT_CONFIG" "$CONFIG"
+    chmod 600 "$CONFIG"
+fi
+
+json_value() {
+    jq -r "$1 // empty" "$CONFIG"
+}
+
+SERVER_URL=$(json_value '.server_url')
+while [ -z "$SERVER_URL" ]; do
+    echo "Tater satellite is not paired; run tater-configure --server-url URL --pairing-code CODE"
+    sleep 10
+    SERVER_URL=$(json_value '.server_url')
+done
+
+PAIRING_CODE=$(json_value '.pairing_code')
+ROOM=$(json_value '.room')
+FRIENDLY_NAME=$(json_value '.name')
+DEVICE_ID=$(json_value '.device_id')
+WAKE_WORD=$(json_value '.wake_word')
+MIC_VOLUME=$(json_value '.mic_volume')
+MIC_AUTO_GAIN=$(json_value '.mic_auto_gain')
+MIC_NOISE_SUPPRESSION=$(json_value '.mic_noise_suppression')
+DEBUG=$(json_value '.debug')
+
+# The pairing code is only needed to obtain the long-lived device token. Once
+# pairing has succeeded, remove the one-time secret from persistent config.
+if [ -s "$TOKEN_FILE" ] && [ -n "$PAIRING_CODE" ]; then
+    temporary=$(mktemp "$CONFIG.XXXXXX")
+    jq '.pairing_code = ""' "$CONFIG" > "$temporary"
+    chmod 600 "$temporary"
+    mv "$temporary" "$CONFIG"
+    PAIRING_CODE=
+fi
+
+[ -n "$WAKE_WORD" ] || WAKE_WORD=okay_nabu
+[ -n "$MIC_VOLUME" ] || MIC_VOLUME=100
+[ -n "$MIC_AUTO_GAIN" ] || MIC_AUTO_GAIN=0
+[ -n "$MIC_NOISE_SUPPRESSION" ] || MIC_NOISE_SUPPRESSION=0
+
+if [ -z "$FRIENDLY_NAME" ] && [ -s "$DEVICE_CONFIG" ]; then
+    FRIENDLY_NAME=$(jq -r '.device.name // empty' "$DEVICE_CONFIG")
+fi
+[ -n "$FRIENDLY_NAME" ] || FRIENDLY_NAME="Tater ThirdReality Speaker"
+
+if [ -z "$DEVICE_ID" ]; then
+    MAC=$(cat /sys/class/net/wlan0/address 2>/dev/null | tr -d ':' || true)
+    [ -n "$MAC" ] || MAC=unknown
+    DEVICE_ID="tater-thirdreality-$MAC"
+fi
+
+set -- /usr/bin/linux-voice-assistant \
+    --name "$FRIENDLY_NAME" \
+    --host 127.0.0.1 \
+    --network-interface wlan0 \
+    --tater-url "$SERVER_URL" \
+    --tater-token-file "$TOKEN_FILE" \
+    --tater-device-id "$DEVICE_ID" \
+    --tater-board thirdreality_s420 \
+    --tater-room "$ROOM" \
+    --wake-model "$WAKE_WORD" \
+    --preferences-file "$PREFERENCES_FILE" \
+    --download-dir "$DOWNLOAD_DIR" \
+    --audio-input-channels 1 \
+    --mic-volume "$MIC_VOLUME" \
+    --mic-auto-gain "$MIC_AUTO_GAIN" \
+    --mic-noise-suppression "$MIC_NOISE_SUPPRESSION" \
+    --peripheral-host 127.0.0.1 \
+    --peripheral-port 6055 \
+    --peripheral-startup-wait 0
+
+[ -n "$PAIRING_CODE" ] && set -- "$@" --tater-token "$PAIRING_CODE"
+[ "$DEBUG" = "true" ] && set -- "$@" --debug
+
+exec "$@"

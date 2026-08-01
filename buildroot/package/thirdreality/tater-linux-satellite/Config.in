@@ -1,0 +1,21 @@
+config BR2_PACKAGE_TATER_LINUX_SATELLITE
+	bool "Tater Linux satellite"
+	depends on BR2_PACKAGE_PYTHON3
+	select BR2_PACKAGE_PYTHON_AIOESPHOMEAPI
+	select BR2_PACKAGE_PYTHON_GETMAC
+	select BR2_PACKAGE_PYTHON_MPV
+	select BR2_PACKAGE_PYTHON_NETIFACES_2
+	select BR2_PACKAGE_PYTHON_NUMPY
+	select BR2_PACKAGE_PYTHON_PYBIND
+	select BR2_PACKAGE_PYOPEN_WAKEWORD
+	select BR2_PACKAGE_PYTHON_PYMICRO_WAKEWORD
+	select BR2_PACKAGE_PYTHON_SOUNDCARD
+	select BR2_PACKAGE_PYTHON_WEBSOCKETS
+	select BR2_PACKAGE_PYTHON_WEBRTC_NOISE_GAIN
+	select BR2_PACKAGE_PYTHON_ZEROCONF
+	help
+	  Tater's Linux voice satellite runtime, connected outbound through the
+	  authenticated Tater native WebSocket protocol. The exact application
+	  revision is pinned in tater-linux-satellite.mk.
+
+	  https://github.com/TaterTotterson/Tater-Linux-Satellite

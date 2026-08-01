@@ -59,15 +59,22 @@ docker_build() {
     fi
     if [ "${NEED_BUILD}" = true ]; then
         INFO "Building Docker image..."
-        docker build -t "${IMAGE_NAME}" "${ROOT_DIR}" || ERROR "Docker image build failed"
+        docker build --platform linux/amd64 -t "${IMAGE_NAME}" "${ROOT_DIR}" || ERROR "Docker image build failed"
     fi
 
     local DOCKER_RUN_ARGS=(
         --rm
+        --platform linux/amd64
         -u "$(id -u):$(id -g)"
         -v "${ROOT_DIR}:/build"
         -e "HOME=/build"
     )
+
+    for ENV_NAME in TATER_SWUPDATE_PRIVATE_KEY_FILE TATER_SWUPDATE_PRIVATE_KEY_PEM; do
+        if [ -n "${!ENV_NAME:-}" ]; then
+            DOCKER_RUN_ARGS+=(-e "$ENV_NAME")
+        fi
+    done
 
     # If buildroot/dl is a symlink, mount the real target so the container can access it
     local DL_PATH="${ROOT_DIR}/buildroot/dl"
@@ -147,7 +154,17 @@ for tc in "${TOOLCHAINS[@]}"; do
     fi
 done
 
+cleanup_signing_material() {
+    rm -f \
+        "${ROOT_DIR}/buildroot/board/thirdreality/common/ota/swu/swupdate-priv.pem" \
+        "${ROOT_DIR}/buildroot/board/thirdreality/common/rootfs/etc/swupdate-public.pem"
+}
+trap cleanup_signing_material EXIT
 mkdir -p ${TARGET_OUTPUT_DIR}
+"${ROOT_DIR}/script/prepare_ota_keys.sh"
+# Buildroot's OTA hooks run from the binaries directory. Export the staged
+# absolute path so a caller-supplied relative key path cannot be misresolved.
+export TATER_SWUPDATE_PRIVATE_KEY_FILE="${ROOT_DIR}/buildroot/board/thirdreality/common/ota/swu/swupdate-priv.pem"
 cd ${BUILDROOT_DIR}
 
 INFO "Starting build for ${TARGET_BUILD_CONFIG}..."

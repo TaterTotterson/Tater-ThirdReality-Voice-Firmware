@@ -1,0 +1,76 @@
+#!/bin/sh
+set -eu
+
+CONFIG=/data/conf/tater.json
+DEFAULT_CONFIG=/usr/share/tater/defaults/tater.json
+TOKEN_FILE=/data/conf/tater-device-token
+RESTART=1
+SHOW=0
+CLEAR_TOKEN=0
+CLEAR_PAIRING_CODE=0
+
+usage() {
+    cat <<'EOF'
+Usage: tater-configure [options]
+
+  --server-url URL       Tater base URL or native WebSocket URL
+  --pairing-code CODE    One-time pairing code or API token
+  --room ROOM            Room reported to Tater
+  --name NAME            Friendly device name
+  --wake-word NAME       Installed wake-word model (default: okay_nabu)
+  --clear-token          Remove the paired device token
+  --clear-pairing-code   Remove the one-time pairing code
+  --show                 Show the effective configuration with secrets redacted
+  --no-restart           Do not restart the voice service after writing
+EOF
+}
+
+mkdir -p /data/conf
+if [ ! -s "$CONFIG" ] || ! jq empty "$CONFIG" >/dev/null 2>&1; then
+    cp "$DEFAULT_CONFIG" "$CONFIG"
+fi
+chmod 600 "$CONFIG"
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --server-url|--pairing-code|--room|--name|--wake-word)
+            [ "$#" -ge 2 ] || { echo "Missing value for $1" >&2; exit 2; }
+            key=$(printf '%s' "$1" | sed 's/^--//; s/-/_/g')
+            tmp=$(mktemp "$CONFIG.XXXXXX")
+            jq --arg key "$key" --arg value "$2" '.[$key] = $value' "$CONFIG" > "$tmp"
+            chmod 600 "$tmp"
+            mv "$tmp" "$CONFIG"
+            shift 2
+            ;;
+        --clear-token) CLEAR_TOKEN=1; shift ;;
+        --clear-pairing-code) CLEAR_PAIRING_CODE=1; shift ;;
+        --show) SHOW=1; shift ;;
+        --no-restart) RESTART=0; shift ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
+    esac
+done
+
+if [ "$CLEAR_TOKEN" -eq 1 ]; then
+    rm -f "$TOKEN_FILE"
+fi
+
+if [ "$CLEAR_PAIRING_CODE" -eq 1 ]; then
+    tmp=$(mktemp "$CONFIG.XXXXXX")
+    jq '.pairing_code = ""' "$CONFIG" > "$tmp"
+    chmod 600 "$tmp"
+    mv "$tmp" "$CONFIG"
+fi
+
+if [ "$SHOW" -eq 1 ]; then
+    jq '.pairing_code = (if .pairing_code == "" then "" else "<redacted>" end)' "$CONFIG"
+    if [ -s "$TOKEN_FILE" ]; then
+        echo "paired_device_token: <stored>"
+    else
+        echo "paired_device_token: <not stored>"
+    fi
+fi
+
+if [ "$RESTART" -eq 1 ] && [ "$SHOW" -eq 0 ]; then
+    /etc/init.d/S99ha-speaker voice-assistant restart
+fi

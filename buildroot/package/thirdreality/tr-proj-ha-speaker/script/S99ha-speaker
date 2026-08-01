@@ -4,7 +4,8 @@
 #
 # Manages:
 #   - netmonitor       (WiFi/internet connectivity state machine)
-#   - voice-assistant  (/usr/bin/linux-voice-assistant-cpp)
+#   - voice-assistant  (/usr/bin/tater-satellite)
+#   - hardware-bridge  (/usr/bin/tater-thirdreality-bridge)
 #   - sendspin-client  (music streaming)
 #   - pulseaudio       (reboot device if it dies)
 #
@@ -12,14 +13,17 @@
 #   S99ha-speaker start|stop|restart
 #   S99ha-speaker <service> start|stop|restart
 #
-# Services: netmonitor, voice-assistant, sendspin-client
+# Services: netmonitor, voice-assistant, hardware-bridge, sendspin-client
 
 PIDDIR=/var/run/thirdreality
 MONITOR_PIDFILE=$PIDDIR/ha-speaker.pid
 NETMONITOR_PIDFILE=$PIDDIR/netmonitor.pid
 VOICE_PIDFILE=$PIDDIR/voice-assistant.pid
+BRIDGE_PIDFILE=$PIDDIR/hardware-bridge.pid
 DEVICE_CONF="/data/conf/device.json"
 
+VOICE_ASSISTANT=/usr/bin/tater-satellite
+HARDWARE_BRIDGE=/usr/bin/tater-thirdreality-bridge
 SENDSPIN_CLIENT=/usr/bin/sendspin-client
 [ -r /etc/default/sendspin-client ] && . /etc/default/sendspin-client
 
@@ -30,6 +34,7 @@ CHECK_INTERVAL=10
 # Removed by:  S99ha-speaker <service> start
 DISABLE_NETMONITOR=/tmp/ha_disable_netmonitor
 DISABLE_VOICE=/tmp/ha_disable_voice
+DISABLE_BRIDGE=/tmp/ha_disable_bridge
 DISABLE_SENDSPIN=/tmp/ha_disable_sendspin
 
 # ---------------------------------------------------------------------------
@@ -67,11 +72,7 @@ stop_netmonitor() {
 start_voice_assistant() {
     is_running "$VOICE_PIDFILE" && return 0
     rm -f "$VOICE_PIDFILE" "$DISABLE_VOICE"
-    local spk_name
-    spk_name=$(jq -r '.device.name // "thirdreality-speaker"' "$DEVICE_CONF")
-    /usr/bin/linux-voice-assistant-cpp \
-        --name "$spk_name" \
-        --port 6053 &
+    "$VOICE_ASSISTANT" &
     echo $! > "$VOICE_PIDFILE"
 }
 
@@ -83,6 +84,25 @@ stop_voice_assistant() {
         kill -9 "$(cat "$VOICE_PIDFILE")" 2>/dev/null
     fi
     rm -f "$VOICE_PIDFILE"
+}
+
+# ---------------------------------------------------------------------------
+# ThirdReality hardware bridge
+# ---------------------------------------------------------------------------
+
+start_hardware_bridge() {
+    is_running "$BRIDGE_PIDFILE" && return 0
+    rm -f "$BRIDGE_PIDFILE" "$DISABLE_BRIDGE"
+    "$HARDWARE_BRIDGE" &
+    echo $! > "$BRIDGE_PIDFILE"
+}
+
+stop_hardware_bridge() {
+    touch "$DISABLE_BRIDGE"
+    if is_running "$BRIDGE_PIDFILE"; then
+        kill "$(cat "$BRIDGE_PIDFILE")" 2>/dev/null
+    fi
+    rm -f "$BRIDGE_PIDFILE"
 }
 
 # ---------------------------------------------------------------------------
@@ -126,13 +146,19 @@ monitor_loop() {
             start_voice_assistant
         fi
 
-        # 3. sendspin-client
+        # 3. hardware bridge
+        if [ ! -f "$DISABLE_BRIDGE" ] && ! is_running "$BRIDGE_PIDFILE"; then
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] hardware bridge not running, restarting..."
+            start_hardware_bridge
+        fi
+
+        # 4. sendspin-client
         if [ ! -f "$DISABLE_SENDSPIN" ] && ! pidof sendspin-client > /dev/null 2>&1; then
             echo "[$(date '+%Y-%m-%d %H:%M:%S')] sendspin-client not running, restarting..."
             start_sendspin
         fi
 
-        # 4. pulseaudio
+        # 5. pulseaudio
         if ! pidof pulseaudio > /dev/null 2>&1; then
             echo "[$(date '+%Y-%m-%d %H:%M:%S')] pulseaudio died, rebooting..."
             sync
@@ -164,11 +190,10 @@ start() {
         paplay /usr/share/thirdreality/audio/setup_mode.wav &
     fi
 
-    # voice-assistant and sendspin-client require network (NTP sync).
-    # Disable them at boot; ntpdate.sh enables them after first sync.
-    touch "$DISABLE_VOICE" "$DISABLE_SENDSPIN"
-
     start_netmonitor
+    start_hardware_bridge
+    start_voice_assistant
+    start_sendspin
 
     monitor_loop &
     echo $! > "$MONITOR_PIDFILE"
@@ -186,10 +211,11 @@ stop() {
 
     /etc/init.d/S44bluetooth stop
     stop_voice_assistant
+    stop_hardware_bridge
     stop_sendspin
     stop_netmonitor
     # Clear disable flags so next start brings everything up
-    rm -f "$DISABLE_NETMONITOR" "$DISABLE_VOICE" "$DISABLE_SENDSPIN"
+    rm -f "$DISABLE_NETMONITOR" "$DISABLE_VOICE" "$DISABLE_BRIDGE" "$DISABLE_SENDSPIN"
 }
 
 restart() {
@@ -222,6 +248,14 @@ service_cmd() {
                 *) echo "Usage: $0 voice-assistant {start|stop|restart}"; exit 1 ;;
             esac
             ;;
+        hardware-bridge)
+            case "$action" in
+                start)   start_hardware_bridge ;;
+                stop)    stop_hardware_bridge ;;
+                restart) stop_hardware_bridge; sleep 1; start_hardware_bridge ;;
+                *) echo "Usage: $0 hardware-bridge {start|stop|restart}"; exit 1 ;;
+            esac
+            ;;
         sendspin-client)
             case "$action" in
                 start)   start_sendspin ;;
@@ -232,7 +266,7 @@ service_cmd() {
             ;;
         *)
             echo "Unknown service: $svc"
-            echo "Services: netmonitor, voice-assistant, sendspin-client"
+            echo "Services: netmonitor, voice-assistant, hardware-bridge, sendspin-client"
             exit 1
             ;;
     esac
@@ -246,12 +280,12 @@ case "$1" in
     start)   start   ;;
     stop)    stop    ;;
     restart) restart ;;
-    netmonitor|voice-assistant|sendspin-client)
+    netmonitor|voice-assistant|hardware-bridge|sendspin-client)
         service_cmd "$1" "$2"
         ;;
     *)
         echo "Usage: $0 {start|stop|restart}"
-        echo "       $0 {netmonitor|voice-assistant|sendspin-client} {start|stop|restart}"
+        echo "       $0 {netmonitor|voice-assistant|hardware-bridge|sendspin-client} {start|stop|restart}"
         exit 1
         ;;
 esac
