@@ -3,6 +3,7 @@
 DEVICE_CONF="/data/conf/device.json"
 DEVICE_CONF_TMP="/tmp/device_info.netmonitor.tmp.json"
 DEVICE_CONF_LOCK="/tmp/device_info.lock"
+TATER_CONF="/data/conf/tater.json"
 
 INTERVAL_CONNECTED=60
 INTERVAL_DISCONNECTED=30
@@ -10,9 +11,6 @@ INTERVAL_SSID=3
 
 WIFI_FAIL_THRESHOLD=2
 INTERNET_FAIL_THRESHOLD=3
-
-CONNECTIVITY_CHECK_URL1="http://connectivitycheck.gstatic.com/generate_204"
-CONNECTIVITY_CHECK_URL2="http://captive.apple.com/hotspot-detect.html"
 
 get_valid_ipv4_address()
 {
@@ -58,20 +56,28 @@ linkReadyCheck()
 
 ensure_dns_config()
 {
-    local dns_server="8.8.8.8"
-    
-    if [ ! -f /etc/resolv.conf ]; then
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Warning: /etc/resolv.conf not found, creating..."
-        echo "nameserver $dns_server" > /etc/resolv.conf
-        return 0
+    # DNS must come from the configured network. Do not silently send device
+    # lookups to a third-party resolver when DHCP did not provide one.
+    if ! grep -q "^nameserver" /etc/resolv.conf 2>/dev/null; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] No DNS resolver supplied by the network"
     fi
-    
-    if ! grep -q "^nameserver" /etc/resolv.conf; then
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] No nameserver present, adding fallback $dns_server to /etc/resolv.conf"
-        echo "nameserver $dns_server" >> /etc/resolv.conf
-    else
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] DNS config OK (nameserver already present)"
-    fi
+}
+
+get_tater_check_url()
+{
+    local url
+
+    url="$(jq -r '.server_url // empty' "$TATER_CONF" 2>/dev/null)"
+    [ -n "$url" ] || return 1
+
+    # curl performs an ordinary HTTP request for the reachability probe. A
+    # WebSocket endpoint still proves reachability when it returns 4xx/426.
+    case "$url" in
+        ws://*)  printf 'http://%s\n' "${url#ws://}" ;;
+        wss://*) printf 'https://%s\n' "${url#wss://}" ;;
+        http://*|https://*) printf '%s\n' "$url" ;;
+        *) printf 'http://%s\n' "$url" ;;
+    esac
 }
 
 update_net_state()
@@ -135,21 +141,18 @@ ssidCheck()
 
 connectivityCheck()
 {
+    local check_url
+
     if ! linkReadyCheck; then
         return 1
     fi
 
-    # Use GET instead of HEAD. Some networks/proxies do not handle HEAD well,
-    # which causes false negatives even though general internet access works.
-    if curl -fsSL --connect-timeout 2 --max-time 3 -o /dev/null "$CONNECTIVITY_CHECK_URL1" 2>/dev/null; then
-        return 0
-    fi
-    
-    if curl -fsSL --connect-timeout 2 --max-time 3 -o /dev/null "$CONNECTIVITY_CHECK_URL2" 2>/dev/null; then
-        return 0
-    fi
-    
-    return 1
+    check_url="$(get_tater_check_url)" || return 1
+
+    # Do not use -f: authentication errors and WebSocket upgrade responses
+    # still demonstrate that the explicitly configured Tater server is up.
+    curl -sSL --connect-timeout 2 --max-time 3 -o /dev/null \
+        "$check_url" 2>/dev/null
 }
 
 netCheckState()

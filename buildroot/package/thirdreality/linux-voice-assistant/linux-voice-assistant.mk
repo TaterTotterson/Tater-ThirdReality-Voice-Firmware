@@ -17,7 +17,6 @@ LINUX_VOICE_ASSISTANT_DEPENDENCIES = \
 	python-pymicro-wakeword \
 	pyopen-wakeword \
 	python-mpv \
-	python-zeroconf \
 	python-getmac \
 	python-webrtc-noise-gain
 

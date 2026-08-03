@@ -7,12 +7,13 @@ use `--update` to advance the pin and then rerun CI and hardware tests.
 | Capability | Status | Implementation |
 | --- | --- | --- |
 | Tater native pairing and device token | Ready | Tater Linux Voice outbound WebSocket |
+| Tater-style setup hotspot | Ready | `Tater-Setup-XXXX`, captive DNS, and local setup form on `192.168.4.1` |
 | Local wake word and microphone streaming | Ready | `pymicro-wakeword` / `pyopen-wakeword` |
 | STT, TTS, tool progress, continued conversation | Ready | Pinned Tater Linux Voice state machine |
 | ThirdReality LEDs | Ready | Local peripheral bridge to the D-Bus LED service |
 | Hardware volume and microphone mute | Ready | Bidirectional `/data/conf/sound.json` synchronization |
 | Home button press-to-talk | Ready | Single press starts or stops the active pipeline |
-| Sendspin / Music Assistant | Preserved | Existing client with voice-active ducking signals |
+| Tater-native media playback | Ready | Authenticated playback commands from the configured Tater server |
 | Signed SWUpdate artifacts | Ready | Build-time external signing key |
 | Production-owned secure boot | Pending | SWUpdate is rekeyed; proprietary Amlogic boot-FIP trust is not |
 | Native Tater timer control | Not advertised | Tater Linux client currently reports `timers: false` |

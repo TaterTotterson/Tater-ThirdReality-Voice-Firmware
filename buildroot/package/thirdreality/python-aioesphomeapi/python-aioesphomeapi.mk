@@ -9,7 +9,6 @@
 #   async-interrupt           - Async context manager for interrupts
 #   protobuf                  - Protocol Buffers serialization
 #   tzlocal                   - Local timezone detection
-#   zeroconf                  - mDNS service discovery
 #   chacha20poly1305-reuseable - Reusable ChaCha20-Poly1305 cipher
 #   cryptography              - Cryptographic primitives
 #   noiseprotocol             - Noise Protocol Framework
@@ -26,7 +25,6 @@ PYTHON_AIOESPHOMEAPI_DEPENDENCIES = \
 	python-async-interrupt \
 	python-protobuf \
 	python-tzlocal \
-	python-zeroconf \
 	python-chacha20poly1305-reuseable \
 	python-cryptography \
 	python-noiseprotocol

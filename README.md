@@ -3,7 +3,7 @@
 Tater firmware for the
 [ThirdReality Voice & Music Assistant](https://github.com/thirdreality/voice-music-assistant).
 This is an independent firmware fork that retains the vendor's Amlogic board
-support and Sendspin music client while replacing its voice application with
+support while replacing its voice application with
 [Tater Linux Voice](https://github.com/TaterTotterson/Tater-Linux-Satellite).
 
 The hardware is not a Pine64 board. It is an Amlogic A113X/S420 Linux appliance
@@ -22,9 +22,8 @@ ThirdReality Amlogic BSP / Buildroot
 ├── ThirdReality hardware bridge
 │   ├── LED ring
 │   ├── home and mute buttons
-│   ├── system volume and microphone mute
-│   └── Sendspin duck / resume
-└── Sendspin client for Music Assistant
+│   └── system volume and microphone mute
+└── Tater-native voice and media playback
 ```
 
 The application source is pinned in
@@ -33,13 +32,13 @@ A weekly CI check reports when Tater Linux Voice `main` moves ahead.
 
 ## Current status
 
-The software integration, security baseline, configuration checks, and bridge
-unit tests are complete. A full Linux image build and on-device audio regression
-pass still require the ThirdReality toolchain submodule, a signing key, and
-physical S420 hardware.
+The software integration, security baseline, configuration checks, bridge unit
+tests, and a full signed Amlogic image build are complete. The remaining gate is
+an on-device audio and provisioning regression pass on physical S420 hardware.
 
 See [the parity matrix](docs/PARITY.md) for the exact supported and deferred
-features.
+features. See [the runtime network policy](docs/NETWORK.md) for every fixed or
+configured outbound destination in the Tater image.
 
 ## Build
 
@@ -69,8 +68,14 @@ key; see [the security model](docs/SECURITY.md).
 
 ## Provision and operate
 
-Wi-Fi provisioning continues to use ThirdReality's Bluetooth Improv flow.
-Tater enrollment currently uses the physical serial recovery console:
+On first boot, the speaker creates an open `Tater-Setup-XXXX` Wi-Fi network.
+Join it and use the captive portal (or open `http://192.168.4.1`) to enter the
+2.4 GHz Wi-Fi credentials, Tater server, pairing code or token, room, and
+speaker name. The setup network has no internet route and disappears after the
+speaker saves its configuration and restarts.
+
+Bluetooth, Improv, Sendspin, and mDNS are not included in the production image.
+The local serial recovery console can still configure Tater directly:
 
 ```sh
 tater-configure \
@@ -80,7 +85,9 @@ tater-configure \
   --name "Kitchen Tater"
 ```
 
-See [provisioning](docs/PROVISIONING.md) for storage paths and service controls.
+Long-press the Tap button to erase Wi-Fi and Tater pairing and reopen the setup
+hotspot. See [provisioning](docs/PROVISIONING.md) for the full flow, storage
+paths, and recovery controls.
 
 ## Validate without building an image
 

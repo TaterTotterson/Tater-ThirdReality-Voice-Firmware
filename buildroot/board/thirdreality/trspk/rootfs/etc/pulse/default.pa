@@ -66,7 +66,6 @@ load-module module-native-protocol-unix
 ### here if you plan to use paprefs)
 #load-module module-esound-protocol-tcp
 #load-module module-native-protocol-tcp
-#load-module module-zeroconf-publish
 
 ### Load the RTP receiver module (also configured via paprefs, see above)
 #load-module module-rtp-recv

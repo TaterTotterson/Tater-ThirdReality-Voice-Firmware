@@ -8,7 +8,6 @@ aarch64, Buildroot).
 ## Features
 
 - ESPHome native API server (TCP 6053, plain-text framing, protobuf)
-- mDNS auto-discovery via avahi (_esphomelib._tcp)
 - 11 entities: mute switch, thinking-sound switch, 3× wake-word
   sensitivity numbers, mic gain, mic volume, mic noise select,
   media player, home button event, firmware update
@@ -26,7 +25,6 @@ aarch64, Buildroot).
 - Home button monitor (/dev/input/event0, single/double/triple press)
 - Mic mute GPIO bridge (hardware slider ↔ HA switch)
 - ALSA system volume sync via adckey_function.sh
-- Sendspin duck/unduck (SIGUSR1/2) during voice pipelines
 - sound.json external-change watcher (500 ms poll)
 - Supervisor HTTP API on port 8086 (HMAC-MD5 signed commands)
 - OTA: check version, download, MD5 verify, swupdate install
@@ -82,7 +80,7 @@ The wake-word model directory is derived from `--wakeword-type`:
 proto/                      Vendored api.proto + api_options.proto
                             (aioesphomeapi v42.7.0)
 src/main.cpp                CLI, startup, epoll main loop
-src/protocol/               ESPHome wire framing, TCP server, mDNS
+src/protocol/               ESPHome wire framing and TCP server
 src/state/                  Preferences (sound.json) + ServerState
 src/entities/               ESPHome entities
 src/audio/                  AudioCapture, LibMpvPlayer, PcmRingBuffer,
@@ -92,7 +90,7 @@ src/audio/                  AudioCapture, LibMpvPlayer, PcmRingBuffer,
                             WebRtcProcessor, IAudioPlayer
 src/satellite/              Voice pipeline state machine
 src/tr/                     ThirdReality integration (LED, GPIO, home
-                            button, volume, sendspin, supervisor, OTA,
+                            button, volume, supervisor, OTA,
                             timezone sync, sound.json watcher)
 src/tools/                  Dev tools (micro_features_dump, tflite_inspect,
                             wake_word_dump, aec_loopback_test)
@@ -109,5 +107,5 @@ sounds/                     UI feedback sounds (wake_word_triggered,
 ## Dependencies (Buildroot)
 
 host-protobuf, protobuf, json-for-modern-cpp, mpv, pulseaudio,
-alsa-lib, webrtc-audio-processing, libcurl, avahi. Plus the vendored
+alsa-lib, webrtc-audio-processing, libcurl. Plus the vendored
 libtensorflowlite_c.so (dlopen'd at runtime, not linked).

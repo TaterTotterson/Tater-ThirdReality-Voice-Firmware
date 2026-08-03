@@ -1,0 +1,159 @@
+diff --git a/linux_voice_assistant/__main__.py b/linux_voice_assistant/__main__.py
+index 182b54c..1cac9fe 100644
+--- a/linux_voice_assistant/__main__.py
++++ b/linux_voice_assistant/__main__.py
+@@ -31,7 +31,6 @@ from .util import (
+ )
+ from .wake_word import find_available_wake_words, load_stop_model, load_wake_models
+ from .webrtc import WebRTCProcessor
+-from .zeroconf import HomeAssistantZeroconf
+
+ _LOGGER = logging.getLogger(__name__)
+ _MODULE_DIR = Path(__file__).parent
+@@ -582,21 +581,11 @@ async def main() -> None:
+     )
+     process_audio_thread.start()
+
+-    # Auto discovery (zeroconf, mDNS) is only used by ESPHome server mode.
+-    if native_client is None:
+-        discovery = HomeAssistantZeroconf(
+-            port=args.port,
+-            name=state.name,
+-            mac_address=state.mac_address,
+-            host_ip_address=host_ip_address,
+-        )
+-        await discovery.register_server()
+-
+     # ------------------------------------------------------------------
+     # Start peripheral API and signal "getting started" to peripherals
+     # ------------------------------------------------------------------
+     if peripheral_api is not None:
+         await peripheral_api.start()
+-        await peripheral_api.emit_event(LVAEvent.ZEROCONF, {"status": "getting_started"})
++        await peripheral_api.emit_event(LVAEvent.CONNECTION, {"status": "getting_started"})
+
+         # Give peripherals a window to connect and register their Light
+diff --git a/linux_voice_assistant/peripheral_api.py b/linux_voice_assistant/peripheral_api.py
+index d8663d8..6ba35af 100644
+--- a/linux_voice_assistant/peripheral_api.py
++++ b/linux_voice_assistant/peripheral_api.py
+@@ -32,6 +32,6 @@ Events emitted to the peripheral container (JSON)
+               Connected leds with peripheral containers should
+               show a red twinkle / "no connection" animation and keep retrying
+-              until they see a ``zeroconf`` event with status "connected".
++              until they see a ``connection`` event with status "connected".
+               NOTE: if LVA itself is not running the peripheral container will
+               see a WebSocket connection failure on its end — that is also
+               a "disconnected" condition to handle with the same animation.
+@@ -45,7 +45,7 @@ Events emitted to the peripheral container (JSON)
+                         voice pipeline announcements — those use tts_speaking.
+   volume_changed        data: {"volume": 0.0–1.0}
+   volume_muted          data: {"muted": true/false}
+-  zeroconf              data: {"status": "getting_started" | "connected"}
++  connection            data: {"status": "getting_started" | "connected"}
+   light_command         data: {"object_id": str, "state": bool, "brightness": float,
+                               "red": float, "green": float, "blue": float, "effect": str}
+               Fires when HA changes a Light entity that a peripheral
+@@ -136,7 +136,7 @@ class LVAEvent(str, Enum):
+     MEDIA_PLAYER_PLAYING = "media_player_playing"
+     VOLUME_CHANGED = "volume_changed"
+     VOLUME_MUTED = "volume_muted"
+-    ZEROCONF = "zeroconf"
++    CONNECTION = "connection"
+     LIGHT_COMMAND = "light_command"
+
+
+diff --git a/linux_voice_assistant/satellite.py b/linux_voice_assistant/satellite.py
+index 6a30d58..28f3017 100644
+--- a/linux_voice_assistant/satellite.py
++++ b/linux_voice_assistant/satellite.py
+@@ -1080,7 +1080,7 @@ class VoiceSatelliteProtocol(asyncio.Protocol):
+             _LOGGER.debug("All entity states sent after connect")
+
+             # Notify peripherals that Home Assistant is now connected
+-            self._emit(LVAEvent.ZEROCONF, {"status": "connected"})
++            self._emit(LVAEvent.CONNECTION, {"status": "connected"})
+
+     # ------------------------------------------------------------------
+     # External wake word download
+diff --git a/linux_voice_assistant/tater_native.py b/linux_voice_assistant/tater_native.py
+index 6c5691f..950fb44 100644
+--- a/linux_voice_assistant/tater_native.py
++++ b/linux_voice_assistant/tater_native.py
+@@ -407,7 +407,7 @@ class TaterNativeClient:
+         self._connected = True
+         self.state.connected = True
+         self.state.satellite = self.satellite
+-        self.satellite._emit(LVAEvent.ZEROCONF, {"status": "connected"})  # pylint: disable=protected-access
++        self.satellite._emit(LVAEvent.CONNECTION, {"status": "connected"})  # pylint: disable=protected-access
+         _LOGGER.info(
+             "Connected to Tater native satellite API selector=%s device_id=%s board=%s room=%s",
+             ack_payload.get("selector") or f"native:{self.device_id}",
+diff --git a/linux_voice_assistant/zeroconf.py b/linux_voice_assistant/zeroconf.py
+deleted file mode 100644
+index 5300788..0000000
+--- a/linux_voice_assistant/zeroconf.py
++++ /dev/null
+@@ -1,50 +0,0 @@
+-"""Runs mDNS zeroconf service for Home Assistant discovery."""
+-
+-import logging
+-import socket
+-from typing import Optional
+-
+-_LOGGER = logging.getLogger(__name__)
+-
+-try:
+-    from zeroconf.asyncio import AsyncServiceInfo, AsyncZeroconf
+-except ImportError:
+-    _LOGGER.fatal("zeroconf not installed. Please install it with: pip install zeroconf")
+-    raise
+-
+-MDNS_TARGET_IP = "224.0.0.251"
+-
+-
+-class HomeAssistantZeroconf:
+-    def __init__(
+-        self,
+-        port: int,
+-        mac_address: str,
+-        host_ip_address: str,
+-        name: Optional[str] = None,
+-    ) -> None:
+-        self.port = port
+-        self.mac_address = mac_address
+-        self.name = name or self.mac_address
+-        self.host_ip_address = host_ip_address
+-
+-        self._aiozc = AsyncZeroconf()
+-
+-    async def register_server(self) -> None:
+-
+-        service_info = AsyncServiceInfo(
+-            "_esphomelib._tcp.local.",
+-            f"{self.name}._esphomelib._tcp.local.",
+-            addresses=[socket.inet_aton(self.host_ip_address)],
+-            port=self.port,
+-            properties={
+-                "version": "2025.9.0",
+-                "mac": self.mac_address,
+-                "board": "host",
+-                "platform": "HOST",
+-                "network": "ethernet",  # or "wifi"
+-            },
+-            server=f"{self.name}.local.",
+-        )
+-        await self._aiozc.async_register_service(service_info)
+-        _LOGGER.debug("Zeroconf discovery enabled: %s", service_info)
+diff --git a/pyproject.toml b/pyproject.toml
+index bb14093..5ad2399 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -29,7 +29,6 @@ dependencies = [
+     "pymicro-wakeword>=2,<3",
+     "pyopen-wakeword>=1,<2",
+     "python-mpv>=1,<2",
+-    "zeroconf<1",
+     "getmac<1",
+     "types-protobuf",
+     "websockets==12",

@@ -1,0 +1,7 @@
+# Tater production hardening: no network-accessible shell or legacy transfer
+# applets. Provisioning is provided by the local Tater HTTP service instead.
+# CONFIG_INETD is not set
+# CONFIG_TELNET is not set
+# CONFIG_TELNETD is not set
+# CONFIG_TFTP is not set
+# CONFIG_TFTPD is not set

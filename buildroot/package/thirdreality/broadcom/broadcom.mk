@@ -29,8 +29,6 @@ define BROADCOM_INSTALL_TARGET_CMDS
 	$(INSTALL) -D -m 0644 $(@D)/config/6212/nvram.txt $(TARGET_DIR)/etc/wifi/6212/nvram.txt
 	$(INSTALL) -D -m 0644 $(@D)/config/6212/nvram_ap6212a.txt $(TARGET_DIR)/etc/wifi/6212/nvram_ap6212a.txt
 	
-	$(INSTALL) -D -m 0644 $(@D)/config/6212/BT/4343A1_Generic_UART_26MHz_wlbga_eLG_litePDS_BT42_BT_MAC.hcd $(TARGET_DIR)/etc/bluetooth/bcm4343a1.hcd
-
 	mkdir -p $(BROADCOM_DRIVER_INSTALL_DIR)
 	$(INSTALL) -m 0666 $(@D)/drivers/ap6xxx/bcmdhd.101.10.361.x/dhd.ko $(BROADCOM_DRIVER_INSTALL_DIR)/dhd.ko
 	echo $(BROADCOM_DRIVER_INSTALL_DIR)/dhd.ko: >> $(TARGET_DIR)/lib/modules/$(LINUX_VERSION_PROBED)/modules.dep

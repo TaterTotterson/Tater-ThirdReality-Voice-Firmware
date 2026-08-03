@@ -100,7 +100,6 @@ Install the required packages for the application:
 ``` sh
 sudo apt update
 sudo apt-get install \
-  avahi-utils \
   pulseaudio-utils \
   alsa-utils \
   pipewire-bin \

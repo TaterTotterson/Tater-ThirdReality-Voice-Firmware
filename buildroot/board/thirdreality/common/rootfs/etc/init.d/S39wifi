@@ -7,26 +7,42 @@
 #
 
 MULTI_WIFI=/usr/bin/multi_wifi_load_driver
+WIFI_MODE_FILE=/tmp/wifi_mode
 
 function start_wpa_suplicant() {
     start-stop-daemon -S -m -p /var/run/wpa_supplicant.pid -b -x /usr/sbin/wpa_supplicant -- -Dnl80211 -iwlan0 -c/etc/wpa_supplicant.conf
 }
 
 function stop_wpa_suplicant() {
-    start-stop-daemon -K -o -p /var/run/wpa_supplicant.pid
-    rm -rf /var/run/wpa_supplicant.pid
+    start-stop-daemon -K -o -p /var/run/wpa_supplicant.pid 2>/dev/null || true
+    rm -f /var/run/wpa_supplicant.pid
 }
 
 function stop_network_services()
 {
-    /etc/init.d/S80dnsmasq stop
+    /etc/init.d/S80dnsmasq stop 2>/dev/null || true
     stop_wpa_suplicant
-    killall hostapd
+    killall hostapd 2>/dev/null || true
+    killall udhcpc 2>/dev/null || true
+}
+
+function unload_wifi_driver()
+{
+    mode=$(cat "$WIFI_MODE_FILE" 2>/dev/null || true)
+    case "$mode" in
+        ap|station)
+            $MULTI_WIFI "$mode" 0 2>/dev/null || true
+            ;;
+    esac
+    rm -f "$WIFI_MODE_FILE"
 }
 
 function wifi_start()
 {
     stop_network_services
+    ifconfig wlan1 down 2>/dev/null || true
+    ifconfig wlan0 down 2>/dev/null || true
+    unload_wifi_driver
 
     echo "start wifi station mode load driver and setup......"
     $MULTI_WIFI station 1
@@ -36,34 +52,53 @@ function wifi_start()
     ifconfig wlan0 0.0.0.0
 
     if [ $? -eq 0 ]; then
-        echo station > /tmp/wifi_mode
+        echo station > "$WIFI_MODE_FILE"
         start_wpa_suplicant
         iw dev wlan0 set power_save off
-        iw wlan0 interface add wlan1 type managed
+        iw wlan0 interface add wlan1 type managed 2>/dev/null || true
         # Keep wlan1 down in station mode to avoid STA+STA dual-interface
         # radio contention and background scanning, which cause packet loss
         # and high latency. wlan1 is only needed when switching to AP mode.
     fi
 }
 
+function wifi_ap_start()
+{
+    stop_network_services
+    ifconfig wlan1 down 2>/dev/null || true
+    ifconfig wlan0 down 2>/dev/null || true
+    unload_wifi_driver
+
+    echo "start wifi access-point mode load driver and setup......"
+    $MULTI_WIFI ap 1
+    mkdir -p /data/vendor/wifi
+    ifconfig wlan0 up
+    ifconfig wlan0 192.168.4.1 netmask 255.255.255.0
+    echo 0 > /proc/sys/net/ipv4/ip_forward
+    iw dev wlan0 set power_save off 2>/dev/null || true
+    echo ap > "$WIFI_MODE_FILE"
+}
+
 case "$1" in
     start)
         wifi_start
         ;;
+    ap)
+        wifi_ap_start
+        ;;
     stop)
         stop_network_services
-        ifconfig wlan1 down
-        ifconfig wlan0 down
-        $MULTI_WIFI station 0
+        ifconfig wlan1 down 2>/dev/null || true
+        ifconfig wlan0 down 2>/dev/null || true
+        unload_wifi_driver
         ;;
     restart)
         $0 stop
         $0 start
         ;;
     *)
-        echo "Usage: $0 {start|stop|restart}"
+        echo "Usage: $0 {start|ap|stop|restart}"
         exit 1
 esac
 
 exit $?
-

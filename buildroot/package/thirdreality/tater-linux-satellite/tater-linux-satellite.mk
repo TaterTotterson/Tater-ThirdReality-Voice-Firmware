@@ -22,8 +22,7 @@ TATER_LINUX_SATELLITE_DEPENDENCIES = \
 	python-pymicro-wakeword \
 	python-soundcard \
 	python-websockets \
-	python-webrtc-noise-gain \
-	python-zeroconf
+	python-webrtc-noise-gain
 
 # GitHub source archives do not contain .git metadata. Give setuptools-scm a
 # deterministic PEP 440 version while keeping the full source SHA above.
@@ -45,6 +44,10 @@ define TATER_LINUX_SATELLITE_INSTALL_RESOURCES
 		$(TARGET_DIR)/usr/bin/tater-configure
 	$(INSTALL) -D -m 0755 $(TATER_LINUX_SATELLITE_PKGDIR)/files/tater-thirdreality-bridge.py \
 		$(TARGET_DIR)/usr/bin/tater-thirdreality-bridge
+	$(INSTALL) -D -m 0755 $(TATER_LINUX_SATELLITE_PKGDIR)/files/tater-provisioning \
+		$(TARGET_DIR)/usr/bin/tater-provisioning
+	$(INSTALL) -D -m 0755 $(TATER_LINUX_SATELLITE_PKGDIR)/files/tater-provisioning-server.py \
+		$(TARGET_DIR)/usr/bin/tater-provisioning-server
 	$(INSTALL) -D -m 0600 $(TATER_LINUX_SATELLITE_PKGDIR)/files/tater.json \
 		$(TARGET_DIR)/usr/share/tater/defaults/tater.json
 endef

@@ -8,7 +8,6 @@ import fcntl
 import json
 import logging
 import os
-import signal
 import struct
 import subprocess
 import time
@@ -104,7 +103,7 @@ def event_animation(event: str, data: Optional[dict[str, Any]] = None) -> Option
     if event == "muted":
         muted = coerce_bool((data or {}).get("muted", False))
         return ("mics-off_on.animation", True) if muted else ("none.animation", True)
-    if event == "zeroconf" and (data or {}).get("status") == "connected":
+    if event == "connection" and (data or {}).get("status") == "connected":
         return "none.animation", True
     if event == "light_command":
         payload = data or {}
@@ -175,25 +174,6 @@ def show_animation(filename: str, to_idle: bool = False) -> None:
         subprocess.run(command, check=False, timeout=2, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except (OSError, subprocess.SubprocessError):
         _LOGGER.exception("Unable to show LED animation %s", filename)
-
-
-def set_sendspin_voice_active(active: bool) -> None:
-    try:
-        result = subprocess.run(
-            ["pidof", "sendspin-client"],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=2,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return
-    signal_number = signal.SIGUSR1 if active else signal.SIGUSR2
-    for raw_pid in result.stdout.split():
-        try:
-            os.kill(int(raw_pid), signal_number)
-        except (ValueError, ProcessLookupError, PermissionError):
-            continue
 
 
 class ThirdRealityBridge:
@@ -269,10 +249,8 @@ class ThirdRealityBridge:
 
         if event in PIPELINE_ACTIVE_EVENTS:
             self.pipeline_active = True
-            await asyncio.to_thread(set_sendspin_voice_active, True)
         elif event in PIPELINE_IDLE_EVENTS:
             self.pipeline_active = False
-            await asyncio.to_thread(set_sendspin_voice_active, False)
 
         animation = event_animation(event, payload)
         if animation is not None:
@@ -371,7 +349,6 @@ class ThirdRealityBridge:
             finally:
                 self.websocket = None
                 self.pipeline_active = False
-                await asyncio.to_thread(set_sendspin_voice_active, False)
                 await asyncio.to_thread(show_animation, "error.animation", True)
             await asyncio.sleep(2)
 

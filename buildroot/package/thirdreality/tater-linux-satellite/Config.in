@@ -12,7 +12,6 @@ config BR2_PACKAGE_TATER_LINUX_SATELLITE
 	select BR2_PACKAGE_PYTHON_SOUNDCARD
 	select BR2_PACKAGE_PYTHON_WEBSOCKETS
 	select BR2_PACKAGE_PYTHON_WEBRTC_NOISE_GAIN
-	select BR2_PACKAGE_PYTHON_ZEROCONF
 	help
 	  Tater's Linux voice satellite runtime, connected outbound through the
 	  authenticated Tater native WebSocket protocol. The exact application

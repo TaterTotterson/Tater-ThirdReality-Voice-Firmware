@@ -1,0 +1,158 @@
+#!/bin/sh
+set -eu
+
+WPA_CONFIG=/etc/wpa_supplicant.conf
+TATER_CONFIG=/data/conf/tater.json
+DEFAULT_TATER_CONFIG=/usr/share/tater/defaults/tater.json
+TOKEN_FILE=/data/conf/tater-device-token
+PREFERENCES_FILE=/data/conf/tater-preferences.json
+MARKER=/tmp/tater-provisioning-active
+SSID_FILE=/tmp/tater-provisioning-ssid
+HOSTAPD_CONFIG=/tmp/tater-hostapd.conf
+HOSTAPD_PID=/var/run/tater-hostapd.pid
+DNSMASQ_PID=/var/run/tater-dnsmasq.pid
+PORTAL_PID=/var/run/tater-provisioning.pid
+
+pid_is_running() {
+    pidfile="$1"
+    [ -s "$pidfile" ] && kill -0 "$(cat "$pidfile")" 2>/dev/null
+}
+
+needs_setup() {
+    grep -q '^[[:space:]]*network={[[:space:]]*$' "$WPA_CONFIG" 2>/dev/null || return 0
+    [ -s "$TATER_CONFIG" ] || return 0
+    server_url=$(jq -r '.server_url // empty' "$TATER_CONFIG" 2>/dev/null || true)
+    pairing_code=$(jq -r '.pairing_code // empty' "$TATER_CONFIG" 2>/dev/null || true)
+    [ -n "$server_url" ] || return 0
+    [ -n "$pairing_code" ] || [ -s "$TOKEN_FILE" ] || return 0
+    return 1
+}
+
+write_hostapd_config() {
+    cat > "$HOSTAPD_CONFIG" <<EOF
+interface=wlan0
+driver=nl80211
+ssid=$1
+hw_mode=g
+channel=6
+auth_algs=1
+wpa=0
+ignore_broadcast_ssid=0
+EOF
+    chmod 600 "$HOSTAPD_CONFIG"
+}
+
+start_services() {
+    mac=$(cat /sys/class/net/wlan0/address 2>/dev/null | tr -d ':' | tr '[:lower:]' '[:upper:]' || true)
+    suffix=$(printf '%s' "$mac" | tail -c 4)
+    [ "${#suffix}" -eq 4 ] || suffix=0000
+    ssid="Tater-Setup-$suffix"
+
+    printf '%s\n' "$ssid" > "$SSID_FILE"
+    write_hostapd_config "$ssid"
+
+    /usr/sbin/hostapd -B -P "$HOSTAPD_PID" "$HOSTAPD_CONFIG"
+
+    /usr/sbin/dnsmasq \
+        --keep-in-foreground \
+        --conf-file=/dev/null \
+        --pid-file="$DNSMASQ_PID" \
+        --interface=wlan0 \
+        --bind-dynamic \
+        --dhcp-range=192.168.4.20,192.168.4.100,255.255.255.0,12h \
+        --dhcp-option=3,192.168.4.1 \
+        --dhcp-option=6,192.168.4.1 \
+        --address=/#/192.168.4.1 \
+        --no-resolv \
+        --no-hosts \
+        >/tmp/tater-dnsmasq.log 2>&1 &
+
+    /usr/bin/tater-provisioning-server >/tmp/tater-provisioning.log 2>&1 &
+    echo $! > "$PORTAL_PID"
+}
+
+start() {
+    if [ -f "$MARKER" ] && pid_is_running "$HOSTAPD_PID" && \
+       pid_is_running "$DNSMASQ_PID" && pid_is_running "$PORTAL_PID"; then
+        return 0
+    fi
+
+    stop_processes
+    touch "$MARKER"
+    /etc/init.d/S39wifi ap
+    start_services
+    echo "Tater setup hotspot ready: $(cat "$SSID_FILE") at http://192.168.4.1/"
+}
+
+stop_pid() {
+    pidfile="$1"
+    if pid_is_running "$pidfile"; then
+        kill "$(cat "$pidfile")" 2>/dev/null || true
+    fi
+    rm -f "$pidfile"
+}
+
+stop_processes() {
+    stop_pid "$PORTAL_PID"
+    stop_pid "$DNSMASQ_PID"
+    stop_pid "$HOSTAPD_PID"
+}
+
+stop() {
+    stop_processes
+    if [ -f "$MARKER" ]; then
+        /etc/init.d/S39wifi stop
+    fi
+    rm -f "$MARKER" "$SSID_FILE" "$HOSTAPD_CONFIG"
+}
+
+reset_setup() {
+    no_reboot=0
+    [ "${1:-}" = "--no-reboot" ] && no_reboot=1
+
+    mkdir -p /data/conf
+    wpa_tmp=$(mktemp "$WPA_CONFIG.XXXXXX")
+    cat > "$wpa_tmp" <<'EOF'
+ctrl_interface=/var/run/wpa_supplicant
+ap_scan=1
+update_config=1
+EOF
+    chmod 600 "$wpa_tmp"
+    mv "$wpa_tmp" "$WPA_CONFIG"
+
+    cp "$DEFAULT_TATER_CONFIG" "$TATER_CONFIG"
+    chmod 600 "$TATER_CONFIG"
+    rm -f "$TOKEN_FILE" "$PREFERENCES_FILE" /data/first_wifi_connected
+    sync
+
+    if [ "$no_reboot" -eq 0 ]; then
+        reboot
+    fi
+}
+
+case "${1:-}" in
+    needs-setup)
+        needs_setup
+        ;;
+    start|ensure)
+        start
+        ;;
+    stop)
+        stop
+        ;;
+    reset)
+        reset_setup "${2:-}"
+        ;;
+    status)
+        if [ -f "$MARKER" ]; then
+            echo "active: $(cat "$SSID_FILE" 2>/dev/null || echo unknown)"
+        else
+            echo inactive
+            exit 1
+        fi
+        ;;
+    *)
+        echo "Usage: $0 {needs-setup|start|ensure|stop|reset [--no-reboot]|status}" >&2
+        exit 2
+        ;;
+esac

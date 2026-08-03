@@ -11,7 +11,7 @@
 #     every lease (no accumulation), so moving between networks does not
 #     leave stale unreachable IPs that would slow down ntpdate. If the new
 #     lease has no Option 42, NTPSERVERS_DHCP is cleared to the empty
-#     string, falling back to the hardcoded NTPSERVERS_IP/NTPSERVERS_DNS.
+#     string, falling back to the configured US NIST servers.
 #   * /etc/ntp.conf is rewritten atomically (tmp + rename) so a concurrent
 #     ntpd start (from S49ntp/ntpdate.sh) cannot read a half-written file.
 #   * On first boot S49ntp has not started yet — letting it run first keeps
@@ -21,8 +21,8 @@
 
 NTP_DEFAULT="/etc/default/ntpd"
 NTP_CONF="/etc/ntp.conf"
-# Public fallback servers (keep in sync with /etc/ntp.conf template).
-NTP_FALLBACK="pool.ntp.org time.cloudflare.com time.google.com time.apple.com"
+# Tater public fallback (keep in sync with /etc/ntp.conf template).
+NTP_FALLBACK="time-a-g.nist.gov time-a-b.nist.gov time-a-wwv.nist.gov"
 
 case "$1" in
     bound|renew)
@@ -60,11 +60,11 @@ case "$1" in
             echo ""
             # DHCP-provided servers first (local, low latency)
             for s in $ntpsrv; do
-                echo "server $s iburst"
+                echo "server $s"
             done
             # Public fallback
             for s in $NTP_FALLBACK; do
-                echo "server $s iburst"
+                echo "server $s"
             done
         } > "$NTP_CONF.tmp" && mv "$NTP_CONF.tmp" "$NTP_CONF"
 

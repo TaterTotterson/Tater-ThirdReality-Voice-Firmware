@@ -50,7 +50,6 @@ from .util import (
 )
 from .wake_word import find_available_wake_words, load_stop_model, load_wake_models
 from .webrtc import WebRTCProcessor
-from .zeroconf import HomeAssistantZeroconf
 
 _LOGGER = logging.getLogger(__name__)
 _MODULE_DIR = Path(__file__).parent
@@ -429,10 +428,6 @@ async def main() -> None:
         daemon=True,
     )
     process_audio_thread.start()
-
-    # Auto discovery (zeroconf, mDNS)
-    discovery = HomeAssistantZeroconf(port=args.port, name=state.name, mac_address=state.mac_address, host_ip_address=host_ip_address)
-    await discovery.register_server()
 
     try:
         async with server:  # type: ignore

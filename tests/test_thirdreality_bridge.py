@@ -61,6 +61,10 @@ class BridgeHelpersTest(unittest.TestCase):
             bridge_module.event_animation("light_command", {"state": False}),
             ("none.animation", True),
         )
+        self.assertEqual(
+            bridge_module.event_animation("connection", {"status": "connected"}),
+            ("none.animation", True),
+        )
 
     def test_atomic_update_preserves_vendor_fields(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

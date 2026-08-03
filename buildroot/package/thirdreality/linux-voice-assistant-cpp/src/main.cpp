@@ -42,7 +42,6 @@
 #include "entities/ThinkingSoundEntity.h"
 #include "entities/UpdateEntity.h"
 #include "protocol/ApiServer.h"
-#include "protocol/MdnsPublisher.h"
 #include "satellite/Satellite.h"
 #include "state/Preferences.h"
 #include "state/ServerState.h"
@@ -594,20 +593,6 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    // mDNS: register _esphomelib._tcp so HA auto-discovers us.
-    lva::proto::MdnsPublisher mdns;
-    {
-        lva::proto::MdnsPublisher::Options mdns_opts;
-        mdns_opts.name    = state.name;
-        mdns_opts.port    = cli.port;
-        mdns_opts.mac     = state.mac_address;
-        mdns_opts.version = state.esphome_version;
-        if (!mdns.Start(mdns_opts)) {
-            LVA_LOGW(kTag, "mDNS registration failed; device won't "
-                           "be auto-discovered by HA");
-        }
-    }
-
     if (music_player->WakeupFd() >= 0) {
         server.AddAuxFd(music_player->WakeupFd(),
                         [&music_player] {
@@ -778,7 +763,6 @@ int main(int argc, char** argv) {
     g_wakeword_engine = nullptr;
 
     if (supervisor_http) supervisor_http->Stop();
-    mdns.Stop();
     home_button->Stop();
     wakeword_engine->Stop();
     audio_capture->Stop();

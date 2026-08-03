@@ -3,29 +3,28 @@
 # S99ha-speaker: unified init script and service monitor for HA speaker.
 #
 # Manages:
+#   - Tater setup AP   (first boot or physical setup reset)
 #   - netmonitor       (WiFi/internet connectivity state machine)
 #   - voice-assistant  (/usr/bin/tater-satellite)
 #   - hardware-bridge  (/usr/bin/tater-thirdreality-bridge)
-#   - sendspin-client  (music streaming)
 #   - pulseaudio       (reboot device if it dies)
 #
 # Usage:
 #   S99ha-speaker start|stop|restart
 #   S99ha-speaker <service> start|stop|restart
 #
-# Services: netmonitor, voice-assistant, hardware-bridge, sendspin-client
+# Services: netmonitor, voice-assistant, hardware-bridge
 
 PIDDIR=/var/run/thirdreality
 MONITOR_PIDFILE=$PIDDIR/ha-speaker.pid
 NETMONITOR_PIDFILE=$PIDDIR/netmonitor.pid
 VOICE_PIDFILE=$PIDDIR/voice-assistant.pid
 BRIDGE_PIDFILE=$PIDDIR/hardware-bridge.pid
-DEVICE_CONF="/data/conf/device.json"
 
 VOICE_ASSISTANT=/usr/bin/tater-satellite
 HARDWARE_BRIDGE=/usr/bin/tater-thirdreality-bridge
-SENDSPIN_CLIENT=/usr/bin/sendspin-client
-[ -r /etc/default/sendspin-client ] && . /etc/default/sendspin-client
+PROVISIONING=/usr/bin/tater-provisioning
+PROVISIONING_MARKER=/tmp/tater-provisioning-active
 
 CHECK_INTERVAL=10
 
@@ -35,7 +34,6 @@ CHECK_INTERVAL=10
 DISABLE_NETMONITOR=/tmp/ha_disable_netmonitor
 DISABLE_VOICE=/tmp/ha_disable_voice
 DISABLE_BRIDGE=/tmp/ha_disable_bridge
-DISABLE_SENDSPIN=/tmp/ha_disable_sendspin
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -106,29 +104,6 @@ stop_hardware_bridge() {
 }
 
 # ---------------------------------------------------------------------------
-# sendspin-client (music streaming)
-# ---------------------------------------------------------------------------
-
-start_sendspin() {
-    pidof sendspin-client > /dev/null 2>&1 && return 0
-
-    /etc/init.d/S50avahi-daemon stop 2>/dev/null
-    /etc/init.d/S50avahi-daemon start 2>/dev/null
-    
-    rm -f "$DISABLE_SENDSPIN"
-    local spk_name
-    spk_name=$(jq -r '.device.name // "3RSPK Speaker"' "$DEVICE_CONF")
-    start-stop-daemon --start --quiet --background --name sendspin-client \
-        --exec "$SENDSPIN_CLIENT" -- $SENDSPIN_CLIENT_OPTS "$spk_name"
-}
-
-stop_sendspin() {
-    touch "$DISABLE_SENDSPIN"
-    start-stop-daemon --stop --quiet --retry=TERM/30/KILL/5 --name sendspin-client
-    start-stop-daemon --stop --quiet --oknodo --retry=0/30/KILL/5 --name sendspin-client
-}
-
-# ---------------------------------------------------------------------------
 # Monitor loop
 # ---------------------------------------------------------------------------
 
@@ -152,15 +127,24 @@ monitor_loop() {
             start_hardware_bridge
         fi
 
-        # 4. sendspin-client
-        if [ ! -f "$DISABLE_SENDSPIN" ] && ! pidof sendspin-client > /dev/null 2>&1; then
-            echo "[$(date '+%Y-%m-%d %H:%M:%S')] sendspin-client not running, restarting..."
-            start_sendspin
-        fi
-
-        # 5. pulseaudio
+        # 4. pulseaudio
         if ! pidof pulseaudio > /dev/null 2>&1; then
             echo "[$(date '+%Y-%m-%d %H:%M:%S')] pulseaudio died, rebooting..."
+            sync
+            sleep 3
+            reboot -f
+        fi
+
+        sleep $CHECK_INTERVAL
+    done
+}
+
+provisioning_monitor_loop() {
+    while true; do
+        "$PROVISIONING" ensure
+
+        if ! pidof pulseaudio > /dev/null 2>&1; then
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] pulseaudio died during setup, rebooting..."
             sync
             sleep 3
             reboot -f
@@ -184,16 +168,18 @@ start() {
 
     /usr/share/thirdreality/script/setup_env.sh
 
-    NETWORK_STATUS=$(jq -r '.network.status // "disconnected"' "$DEVICE_CONF" 2>/dev/null)
-    if [ "$NETWORK_STATUS" = "disconnected" ]; then
-        /etc/init.d/S44bluetooth up
+    if "$PROVISIONING" needs-setup; then
+        "$PROVISIONING" start
         paplay /usr/share/thirdreality/audio/setup_mode.wav &
+        provisioning_monitor_loop &
+        echo $! > "$MONITOR_PIDFILE"
+        echo "Tater setup hotspot started (PID: $(cat "$MONITOR_PIDFILE"))"
+        return 0
     fi
 
     start_netmonitor
     start_hardware_bridge
     start_voice_assistant
-    start_sendspin
 
     monitor_loop &
     echo $! > "$MONITOR_PIDFILE"
@@ -209,13 +195,14 @@ stop() {
     fi
     rm -f "$MONITOR_PIDFILE"
 
-    /etc/init.d/S44bluetooth stop
+    if [ -f "$PROVISIONING_MARKER" ]; then
+        "$PROVISIONING" stop
+    fi
     stop_voice_assistant
     stop_hardware_bridge
-    stop_sendspin
     stop_netmonitor
     # Clear disable flags so next start brings everything up
-    rm -f "$DISABLE_NETMONITOR" "$DISABLE_VOICE" "$DISABLE_BRIDGE" "$DISABLE_SENDSPIN"
+    rm -f "$DISABLE_NETMONITOR" "$DISABLE_VOICE" "$DISABLE_BRIDGE"
 }
 
 restart() {
@@ -256,17 +243,9 @@ service_cmd() {
                 *) echo "Usage: $0 hardware-bridge {start|stop|restart}"; exit 1 ;;
             esac
             ;;
-        sendspin-client)
-            case "$action" in
-                start)   start_sendspin ;;
-                stop)    stop_sendspin ;;
-                restart) stop_sendspin; sleep 1; start_sendspin ;;
-                *) echo "Usage: $0 sendspin-client {start|stop|restart}"; exit 1 ;;
-            esac
-            ;;
         *)
             echo "Unknown service: $svc"
-            echo "Services: netmonitor, voice-assistant, hardware-bridge, sendspin-client"
+            echo "Services: netmonitor, voice-assistant, hardware-bridge"
             exit 1
             ;;
     esac
@@ -280,12 +259,12 @@ case "$1" in
     start)   start   ;;
     stop)    stop    ;;
     restart) restart ;;
-    netmonitor|voice-assistant|hardware-bridge|sendspin-client)
+    netmonitor|voice-assistant|hardware-bridge)
         service_cmd "$1" "$2"
         ;;
     *)
         echo "Usage: $0 {start|stop|restart}"
-        echo "       $0 {netmonitor|voice-assistant|hardware-bridge|sendspin-client} {start|stop|restart}"
+        echo "       $0 {netmonitor|voice-assistant|hardware-bridge} {start|stop|restart}"
         exit 1
         ;;
 esac

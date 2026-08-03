@@ -143,8 +143,15 @@ endif
 define NCURSES_TARGET_CLEANUP_TERMINFO
 	$(RM) -rf $(TARGET_DIR)/usr/share/terminfo $(TARGET_DIR)/usr/share/tabset
 	$(foreach t,$(NCURSES_TERMINFO_FILES), \
-		$(INSTALL) -D -m 0644 $(STAGING_DIR)/usr/share/terminfo/$(t) \
-			$(TARGET_DIR)/usr/share/terminfo/$(t)
+		src="$(STAGING_DIR)/usr/share/terminfo/$(t)"; \
+		if test ! -f "$$src"; then \
+			term="$(notdir $(t))"; \
+			first="$${term%"$${term#?}"}"; \
+			hex="$$(printf '%x' "'$$first")"; \
+			src="$(STAGING_DIR)/usr/share/terminfo/$$hex/$$term"; \
+		fi; \
+		$(INSTALL) -D -m 0644 "$$src" \
+			"$(TARGET_DIR)/usr/share/terminfo/$(t)";
 	)
 endef
 NCURSES_POST_INSTALL_TARGET_HOOKS += NCURSES_TARGET_CLEANUP_TERMINFO

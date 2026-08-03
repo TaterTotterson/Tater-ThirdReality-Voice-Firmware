@@ -140,7 +140,6 @@
 ./etc/network/interfaces
 ./etc/network/if-down.d
 ./etc/ssl
-./etc/inetd.conf
 ./etc/mtab
 ./etc/hosts
 ./etc/os-release
@@ -179,7 +178,6 @@
 ./usr/bin/bzcat
 ./usr/bin/vlock
 ./usr/bin/id
-./usr/bin/telnet
 ./usr/bin/last
 ./usr/bin/test
 ./usr/bin/crontab
@@ -187,7 +185,6 @@
 ./usr/bin/dos2unix
 ./usr/bin/dc
 ./usr/bin/reset
-./usr/bin/tftp
 ./usr/bin/du
 ./usr/bin/head
 ./usr/bin/sha3sum
@@ -275,11 +272,9 @@
 ./usr/sbin/iw
 ./usr/sbin/fdformat
 ./usr/sbin/adduser
-./usr/sbin/inetd
 ./usr/sbin/wpa_supplicant
 ./usr/sbin/readprofile
 ./usr/sbin/arping
-./usr/sbin/telnetd
 ./usr/sbin/dnsd
 ./usr/sbin/setlogcons
 ./usr/sbin/crond

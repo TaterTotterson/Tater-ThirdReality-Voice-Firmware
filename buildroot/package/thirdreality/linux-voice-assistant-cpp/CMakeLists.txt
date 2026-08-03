@@ -98,11 +98,6 @@ message(STATUS "Found webrtc-audio-processing ${WEBRTC_APM_VERSION} via pkg-conf
 pkg_check_modules(LIBCURL REQUIRED IMPORTED_TARGET libcurl)
 message(STATUS "Found libcurl ${LIBCURL_VERSION} via pkg-config")
 
-# avahi-client: mDNS service registration (_esphomelib._tcp) for
-# HA auto-discovery. avahi-daemon is already in defconfig.
-pkg_check_modules(AVAHI_CLIENT REQUIRED IMPORTED_TARGET avahi-client)
-message(STATUS "Found avahi-client ${AVAHI_CLIENT_VERSION} via pkg-config")
-
 # alsa-lib: required by the aec_loopback_test dev tool, which opens
 # the hardware loopback capture device (e.g. plughw:0,4) directly.
 # A future change will also use this in the production AudioCapture
@@ -161,7 +156,6 @@ add_executable(linux-voice-assistant-cpp
     src/protocol/MessageRegistry.cpp
     src/protocol/Connection.cpp
     src/protocol/ApiServer.cpp
-    src/protocol/MdnsPublisher.cpp
     src/state/Preferences.cpp
     src/state/ServerState.cpp
     src/audio/LibMpvPlayer.cpp
@@ -181,7 +175,6 @@ add_executable(linux-voice-assistant-cpp
     src/tr/LedRing.cpp
     src/tr/MicMuteGpio.cpp
     src/tr/OtaClient.cpp
-    src/tr/SendspinSignal.cpp
     src/tr/SoundConfWatcher.cpp
     src/tr/Supervisor.cpp
     src/tr/SupervisorHttpServer.cpp
@@ -227,7 +220,6 @@ target_link_libraries(linux-voice-assistant-cpp
         PkgConfig::ALSA
         PkgConfig::WEBRTC_APM
         PkgConfig::LIBCURL
-        PkgConfig::AVAHI_CLIENT
         Threads::Threads
         ${CMAKE_DL_LIBS}   # for dlopen/dlsym in TfliteRuntime
 )

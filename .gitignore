@@ -5,6 +5,7 @@
 /*.patch
 /TODO.txt
 /.secrets/
+/.wget-hsts
 __pycache__/
 *.py[cod]
 /buildroot/board/thirdreality/common/ota/swu/swupdate-priv.pem

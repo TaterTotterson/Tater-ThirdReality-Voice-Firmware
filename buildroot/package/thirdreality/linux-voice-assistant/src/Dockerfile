@@ -14,7 +14,6 @@ LABEL \
     org.opencontainers.image.url="https://github.com/OHF-Voice/linux-voice-assistant"
 
 ### Install packages:
-# - avahi-utils:        For zeroconf/mDNS discovery by Home Assistant
 # - pulseaudio-utils:   Required by soundcard library for audio I/O
 # - alsa-utils:         ALSA tools for audio device management
 # - pipewire-bin:       Required for pipewire support
@@ -28,7 +27,6 @@ LABEL \
 # - procps:             For pgrep in healthcheck
 RUN apt-get update && \
     apt-get install --yes --no-install-recommends \
-    avahi-utils \
     pulseaudio-utils \
     alsa-utils \
     pipewire-bin \

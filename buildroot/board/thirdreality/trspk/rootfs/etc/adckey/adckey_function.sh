@@ -91,6 +91,10 @@ factory_reset() {
 
     sleep 3
 
+    # Clear the Wi-Fi station profile as well as Tater pairing. /etc lives
+    # outside /data on this platform, so wiping /data alone is insufficient.
+    /usr/bin/tater-provisioning reset --no-reboot
+
     for i in $(seq 3); do
         killall5 -9
         sleep 1
@@ -151,7 +155,8 @@ change_wifi() {
     fi
 
     dbus-send --system --type=signal /com/3r/EventBus com._3reality.EventBus.LedShow boolean:false array:string:'/usr/share/thirdreality/animation/ntf_incoming.animation'
-    /etc/init.d/S44bluetooth restart
+    paplay /usr/share/thirdreality/audio/setup_mode.wav &
+    /usr/bin/tater-provisioning reset
 }
 
 case $1 in
