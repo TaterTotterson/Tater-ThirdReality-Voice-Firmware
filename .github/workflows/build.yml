@@ -32,7 +32,7 @@ jobs:
           bash -n script/update_tater_linux_source.sh
           sh -n buildroot/package/thirdreality/tater-linux-satellite/files/tater-satellite-launcher
           sh -n buildroot/package/thirdreality/tater-linux-satellite/files/tater-configure
-          sh -n buildroot/package/thirdreality/tr-proj-ha-speaker/script/S99ha-speaker
+          sh -n buildroot/package/thirdreality/tater-s420-firmware/script/S99tater-satellite
 
       - name: Resolve Buildroot configuration
         run: |
@@ -40,6 +40,7 @@ jobs:
           cp buildroot/configs/3reality_trspk_defconfig /tmp/tater-buildroot-config/.config
           make -C buildroot O=/tmp/tater-buildroot-config olddefconfig
           grep -q '^BR2_PACKAGE_TATER_LINUX_SATELLITE=y$' /tmp/tater-buildroot-config/.config
+          grep -q '^BR2_PACKAGE_TATER_S420_FIRMWARE=y$' /tmp/tater-buildroot-config/.config
           grep -q '^# BR2_PACKAGE_DROPBEAR is not set$' /tmp/tater-buildroot-config/.config
           ! grep -q '^BR2_PACKAGE_ANDROID_TOOLS5_ADBD=y$' /tmp/tater-buildroot-config/.config
 

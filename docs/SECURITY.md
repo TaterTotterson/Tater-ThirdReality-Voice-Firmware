@@ -19,6 +19,9 @@ This fork does not ship the vendor image's remote administration defaults.
 - The upstream SWUpdate private key and matching public key were removed.
   Every build derives its embedded public key from externally supplied signing
   material, and the private key is removed from OTA staging after signing.
+- Native OTA commands arrive only through the authenticated Tater session.
+  Downloaded archives are passed to SWUpdate with the embedded public key;
+  unsigned or differently signed images are rejected before installation.
 
 The serial header still opens a local root recovery shell. Treat physical access
 to the debug header as administrative access. It remains an intentional recovery

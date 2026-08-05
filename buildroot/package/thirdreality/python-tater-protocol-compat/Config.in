@@ -1,0 +1,7 @@
+config BR2_PACKAGE_PYTHON_TATER_PROTOCOL_COMPAT
+	bool "Tater voice protocol compatibility schema"
+	depends on BR2_PACKAGE_PYTHON3
+	select BR2_PACKAGE_PYTHON_PROTOBUF
+	help
+	  Generated protobuf and model types used internally by the Tater
+	  Linux voice state machine. Client and discovery code is pruned.

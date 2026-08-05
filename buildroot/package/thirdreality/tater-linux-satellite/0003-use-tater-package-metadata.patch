@@ -1,0 +1,50 @@
+diff --git a/pyproject.toml b/pyproject.toml
+index 5ad2399..38083c0 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -1,16 +1,17 @@
+ [build-system]
+-requires = ["setuptools>=62.3", "setuptools-scm>=8"]
++requires = ["setuptools>=62.3"]
+ build-backend = "setuptools.build_meta"
+ 
+ [project]
+ name        = "linux-voice-assistant"
++version     = "1.1.13.post1"
+ license     = {text = "Apache-2.0"}
+-description = "Linux voice assistant for Tater native satellites and Home Assistant ESPHome"
++description = "Tater-native Linux voice satellite runtime"
+-readme      = "README.md"
++readme      = {text = "Tater-native Linux voice satellite runtime.", content-type = "text/plain"}
+ authors     = [
+-    {name = "The Home Assistant Authors", email = "hello@home-assistant.io"}
++    {name = "Tater Contributors"}
+ ]
+-keywords    = ["home", "assistant", "voice", "esphome", "linux", "tater"]
++keywords    = ["tater", "voice", "satellite", "linux"]
+ classifiers = [
+     "Development Status :: 3 - Alpha",
+     "Intended Audience :: Developers",
+@@ -24,5 +25,4 @@ requires-python = ">=3.11.0"
+ dependencies = [
+-    "aioesphomeapi==45.3.1",
+     "netifaces2==0.0.22",
+     "soundcard<1",
+     "numpy>=2,<3",
+@@ -34,8 +34,6 @@ dependencies = [
+     "websockets==12",
+     "webrtc-noise-gain>=1,<2",
+ ]
+-dynamic = ["version"]
+-
+ [project.optional-dependencies]
+ dev = [
+     "black",
+@@ -52,7 +51,6 @@ linux-voice-assistant = "linux_voice_assistant.__main__:run"
+ 
+ [project.urls]
+ "Source Code" = "https://github.com/TaterTotterson/Tater-Linux-Satellite"
+-"Upstream" = "https://github.com/OHF-Voice/linux-voice-assistant"
+ 
+ [tool.setuptools]
+ platforms = ["any"]

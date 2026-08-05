@@ -17,7 +17,7 @@ Usage: tater-configure [options]
   --pairing-code CODE    One-time pairing code or API token
   --room ROOM            Room reported to Tater
   --name NAME            Friendly device name
-  --wake-word NAME       Installed wake-word model (default: okay_nabu)
+  --wake-word NAME       Installed wake-word model (default: hey_tater)
   --clear-token          Remove the paired device token
   --clear-pairing-code   Remove the one-time pairing code
   --show                 Show the effective configuration with secrets redacted
@@ -72,5 +72,5 @@ if [ "$SHOW" -eq 1 ]; then
 fi
 
 if [ "$RESTART" -eq 1 ] && [ "$SHOW" -eq 0 ]; then
-    /etc/init.d/S99ha-speaker voice-assistant restart
+    /etc/init.d/S99tater-satellite voice-assistant restart
 fi

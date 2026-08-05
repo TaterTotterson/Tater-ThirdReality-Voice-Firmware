@@ -14,6 +14,26 @@ ZEROCONF_REMOVAL_PATCH = (
     ROOT
     / "buildroot/package/thirdreality/tater-linux-satellite/0001-remove-zeroconf-discovery.patch"
 )
+TATER_FEATURE_PATCH = (
+    ROOT
+    / "buildroot/package/thirdreality/tater-linux-satellite/0002-enable-tater-native-features.patch"
+)
+TATER_METADATA_PATCH = (
+    ROOT
+    / "buildroot/package/thirdreality/tater-linux-satellite/0003-use-tater-package-metadata.patch"
+)
+TATER_NATIVE_ONLY_PATCH = (
+    ROOT
+    / "buildroot/package/thirdreality/tater-linux-satellite/0004-remove-legacy-listener.patch"
+)
+TATER_NO_FRAME_SENDER_PATCH = (
+    ROOT
+    / "buildroot/package/thirdreality/tater-linux-satellite/0005-remove-legacy-frame-sender.patch"
+)
+TATER_FEATURES = (
+    ROOT
+    / "buildroot/package/thirdreality/tater-linux-satellite/files/tater_features.py"
+)
 LAUNCHER = ROOT / "buildroot/package/thirdreality/tater-linux-satellite/files/tater-satellite-launcher"
 HARDWARE_BRIDGE = (
     ROOT
@@ -26,22 +46,27 @@ PROVISIONING_SERVER = (
     ROOT
     / "buildroot/package/thirdreality/tater-linux-satellite/files/tater-provisioning-server.py"
 )
-SUPERVISOR = ROOT / "buildroot/package/thirdreality/tr-proj-ha-speaker/script/S99ha-speaker"
+SUPERVISOR = ROOT / "buildroot/package/thirdreality/tater-s420-firmware/script/S99tater-satellite"
 WIFI_INIT = ROOT / "buildroot/board/thirdreality/common/rootfs/etc/init.d/S39wifi"
 KERNEL_FRAGMENT = ROOT / "buildroot/board/thirdreality/trspk/linux-no-bluetooth.fragment"
 KEY_HANDLER = (
     ROOT / "buildroot/board/thirdreality/trspk/rootfs/etc/adckey/adckey_function.sh"
 )
-AIOESPHOMEAPI_CONFIG = ROOT / "buildroot/package/thirdreality/python-aioesphomeapi/Config.in"
-AIOESPHOMEAPI_MK = (
+PROTOCOL_COMPAT_CONFIG = ROOT / "buildroot/package/thirdreality/python-tater-protocol-compat/Config.in"
+PROTOCOL_COMPAT_MK = (
     ROOT
-    / "buildroot/package/thirdreality/python-aioesphomeapi/python-aioesphomeapi.mk"
+    / "buildroot/package/thirdreality/python-tater-protocol-compat/python-tater-protocol-compat.mk"
+)
+PROTOCOL_COMPAT_NO_MDNS_PATCH = (
+    ROOT
+    / "buildroot/package/thirdreality/python-tater-protocol-compat/0001-allow-import-without-zeroconf.patch"
 )
 BROADCOM_MK = ROOT / "buildroot/package/thirdreality/broadcom/broadcom.mk"
 SENDSPIN_PACKAGE = ROOT / "buildroot/package/thirdreality/sendspin-client"
 BUSYBOX_FRAGMENT = ROOT / "buildroot/board/thirdreality/trspk/busybox-tater.fragment"
+BLACKLIST = ROOT / "buildroot/board/thirdreality/trspk/blacklist.txt"
 POST_BUILD = ROOT / "buildroot/board/thirdreality/trspk/post_build.sh"
-NETMONITOR = ROOT / "buildroot/package/thirdreality/tr-proj-ha-speaker/script/netmonitor"
+NETMONITOR = ROOT / "buildroot/package/thirdreality/tater-s420-firmware/script/netmonitor"
 OTA_SCRIPT = ROOT / "buildroot/board/thirdreality/common/ota/swu/ota_package_create.sh"
 BUILD_SCRIPT = ROOT / "go"
 PRIVATE_KEY = ROOT / "buildroot/board/thirdreality/common/ota/swu/swupdate-priv.pem"
@@ -74,6 +99,11 @@ def main() -> int:
     package_mk = PACKAGE_MK.read_text(encoding="utf-8")
     package_config = PACKAGE_CONFIG.read_text(encoding="utf-8")
     zeroconf_removal_patch = ZEROCONF_REMOVAL_PATCH.read_text(encoding="utf-8")
+    tater_feature_patch = TATER_FEATURE_PATCH.read_text(encoding="utf-8")
+    tater_metadata_patch = TATER_METADATA_PATCH.read_text(encoding="utf-8")
+    tater_native_only_patch = TATER_NATIVE_ONLY_PATCH.read_text(encoding="utf-8")
+    tater_no_frame_sender_patch = TATER_NO_FRAME_SENDER_PATCH.read_text(encoding="utf-8")
+    tater_features = TATER_FEATURES.read_text(encoding="utf-8")
     launcher = LAUNCHER.read_text(encoding="utf-8")
     hardware_bridge = HARDWARE_BRIDGE.read_text(encoding="utf-8")
     provisioning = PROVISIONING.read_text(encoding="utf-8")
@@ -82,10 +112,12 @@ def main() -> int:
     wifi_init = WIFI_INIT.read_text(encoding="utf-8")
     kernel_fragment = KERNEL_FRAGMENT.read_text(encoding="utf-8")
     key_handler = KEY_HANDLER.read_text(encoding="utf-8")
-    aioesphomeapi_config = AIOESPHOMEAPI_CONFIG.read_text(encoding="utf-8")
-    aioesphomeapi_mk = AIOESPHOMEAPI_MK.read_text(encoding="utf-8")
+    protocol_compat_config = PROTOCOL_COMPAT_CONFIG.read_text(encoding="utf-8")
+    protocol_compat_mk = PROTOCOL_COMPAT_MK.read_text(encoding="utf-8")
+    protocol_compat_no_mdns_patch = PROTOCOL_COMPAT_NO_MDNS_PATCH.read_text(encoding="utf-8")
     broadcom_mk = BROADCOM_MK.read_text(encoding="utf-8")
     busybox_fragment = BUSYBOX_FRAGMENT.read_text(encoding="utf-8")
+    blacklist = BLACKLIST.read_text(encoding="utf-8")
     post_build = POST_BUILD.read_text(encoding="utf-8")
     netmonitor = NETMONITOR.read_text(encoding="utf-8")
     ota_script = OTA_SCRIPT.read_text(encoding="utf-8")
@@ -101,8 +133,8 @@ def main() -> int:
     require("BR2_PACKAGE_DROPBEAR=y" not in defconfig, "Dropbear is enabled", errors)
     require("BR2_PACKAGE_ANDROID_TOOLS5_ADBD=y" not in defconfig, "adbd is enabled", errors)
     require("BR2_PACKAGE_TATER_LINUX_SATELLITE=y" in defconfig, "Tater package is disabled", errors)
-    require("BR2_PACKAGE_LINUX_VOICE_ASSISTANT=y" not in defconfig, "legacy Python assistant is enabled", errors)
-    require("BR2_PACKAGE_LINUX_VOICE_ASSISTANT_CPP=y" not in defconfig, "legacy C++ assistant is enabled", errors)
+    require("BR2_PACKAGE_TATER_S420_FIRMWARE=y" in defconfig, "Tater S420 integration is disabled", errors)
+    require("BR2_PACKAGE_TR_PROJ_HA_SPEAKER" not in defconfig, "legacy HA project package is selected", errors)
     require("BR2_PACKAGE_SENDSPIN_CLIENT=y" not in defconfig, "Sendspin is enabled", errors)
     require("BR2_PACKAGE_AVAHI=y" not in defconfig, "Avahi is enabled", errors)
     require("BR2_PACKAGE_AVAHI_DAEMON=y" not in defconfig, "Avahi daemon is enabled", errors)
@@ -123,8 +155,20 @@ def main() -> int:
     require("BR2_PACKAGE_DNSMASQ_DHCP=y" in defconfig, "dnsmasq DHCP is disabled", errors)
     require("BR2_PACKAGE_PYTHON_ZEROCONF" not in package_config, "Tater selects Zeroconf", errors)
     require("python-zeroconf" not in package_mk, "Tater depends on Zeroconf", errors)
-    require("BR2_PACKAGE_PYTHON_ZEROCONF" not in aioesphomeapi_config, "aioesphomeapi selects Zeroconf", errors)
-    require("python-zeroconf" not in aioesphomeapi_mk, "aioesphomeapi depends on Zeroconf", errors)
+    require(
+        "Resolve protocol compatibility version" in package_mk
+        and "COMMANDS FROM TATER" in package_mk,
+        "legacy Home Assistant/ESPHome comments are not rewritten",
+        errors,
+    )
+    require("BR2_PACKAGE_PYTHON_ZEROCONF" not in protocol_compat_config, "protocol compatibility schema selects Zeroconf", errors)
+    require("python-zeroconf" not in protocol_compat_mk, "protocol compatibility schema depends on Zeroconf", errors)
+    require(
+        "+from .client" not in protocol_compat_no_mdns_patch
+        and "+from .reconnect_logic" not in protocol_compat_no_mdns_patch,
+        "protocol compatibility schema still exports its removed network client",
+        errors,
+    )
     require(
         not SENDSPIN_PACKAGE.exists() or not any(SENDSPIN_PACKAGE.iterdir()),
         "Sendspin package remains in the source tree",
@@ -133,6 +177,7 @@ def main() -> int:
     require("sendspin" not in supervisor.lower(), "supervisor still manages Sendspin", errors)
     require("avahi" not in supervisor.lower(), "supervisor still starts Avahi", errors)
     require("sendspin" not in hardware_bridge.lower(), "hardware bridge still controls Sendspin", errors)
+    require("/usr/bin/dbus-send" not in blacklist, "release blacklist removes the LED bridge dependency", errors)
     active_runtime = "\n".join((supervisor, ntp_files["boot sync"], key_handler))
     require("S44bluetooth" not in active_runtime, "active runtime still calls Bluetooth setup", errors)
     require("/etc/bluetooth" not in broadcom_mk, "Broadcom package still installs Bluetooth firmware", errors)
@@ -149,13 +194,37 @@ def main() -> int:
     require("<link " not in provisioning_server, "setup page loads a remote resource", errors)
     require('LVAEvent.CONNECTION' in zeroconf_removal_patch, "Tater connection event is not patched", errors)
     require('-from .zeroconf import HomeAssistantZeroconf' in zeroconf_removal_patch, "Zeroconf removal patch is incomplete", errors)
+    require("--tater-url is required" in tater_feature_patch, "Linux voice runtime can still enter ESPHome server mode", errors)
+    require("-                server = await loop.create_server(" in tater_native_only_patch, "legacy TCP listener removal patch is incomplete", errors)
+    require("+                server = await loop.create_server(" not in tater_native_only_patch, "legacy TCP listener is still enabled", errors)
+    require(
+        "-from aioesphomeapi._frame_helper.packets import make_plain_text_packets"
+        in tater_no_frame_sender_patch,
+        "legacy packet-framing import is still active",
+        errors,
+    )
+    require(
+        "production image has no legacy TCP listener or packet sender."
+        in tater_no_frame_sender_patch,
+        "legacy packet sender is not disabled",
+        errors,
+    )
+    require('"tater_connected": state.connected' in tater_feature_patch, "peripheral snapshot still uses HA connection naming", errors)
+    require('version     = "1.1.13.post1"' in tater_metadata_patch, "Tater Linux package version metadata is not fixed", errors)
+    require('description = "Tater-native Linux voice satellite runtime"' in tater_metadata_patch, "legacy assistant metadata remains active", errors)
+    for capability in ("live_settings", "timers", "ota", "setup_mode", "persistent_media_sessions", "tts_overlays"):
+        require(f'"{capability}": True' in tater_features, f"Tater feature is missing: {capability}", errors)
+    for unsupported in ("synchronized_media_sessions", "stereo_channel_selection", "media_drift_correction"):
+        require(f'"{unsupported}": False' in tater_features, f"unsupported capability is not truthfully disabled: {unsupported}", errors)
+    require('"-k",' in tater_features and 'str(_SWUPDATE_KEY)' in tater_features, "OTA does not require the SWUpdate public key", errors)
+    require('"-i",' in tater_features and 'str(_OTA_PATH)' in tater_features, "OTA does not pass the downloaded image to SWUpdate", errors)
     for applet in ("INETD", "TELNET", "TELNETD", "TFTP", "TFTPD"):
         require(
             f"# CONFIG_{applet} is not set" in busybox_fragment,
             f"BusyBox network debug applet is not disabled: {applet}",
             errors,
         )
-    for path in ("S41inetd", "S55adbd", "telnetd", "module-rtp-recv.so", "module-raop-sink.so"):
+    for path in ("S41inetd", "S55adbd", "S99ha-speaker", "telnetd", "module-rtp-recv.so", "module-raop-sink.so"):
         require(path in post_build, f"post-build hardening does not remove {path}", errors)
     for endpoint in (
         "connectivitycheck.gstatic.com",
@@ -167,6 +236,10 @@ def main() -> int:
     require("get_tater_check_url" in netmonitor, "network monitor does not probe the paired Tater server", errors)
     require("--peripheral-host 127.0.0.1" in launcher, "peripheral API is not loopback-only", errors)
     require("--tater-board thirdreality_s420" in launcher, "board identity is missing", errors)
+    require("WAKE_WORD=hey_tater" in launcher, "Hey Tater is not the launcher default", errors)
+    require("okay_nabu" not in launcher, "launcher retains the old Home Assistant wake word", errors)
+    require("-iname '*nabu*'" in package_mk, "Home Assistant wake-word assets are not pruned", errors)
+    require("-iname '*nabu*'" in post_build, "incremental builds can retain Home Assistant wake-word assets", errors)
     require(not PRIVATE_KEY.exists(), "private OTA key is present in the source tree", errors)
     require(not PUBLIC_KEY.exists(), "generated OTA public key is present in the source tree", errors)
     require("cp swupdate-priv.pem" not in ota_script, "OTA archive copies its signing key", errors)
@@ -186,6 +259,11 @@ def main() -> int:
     require("iburst" not in ntp_files["daemon defaults"], "NIST servers use iburst", errors)
     require("iburst" not in ntp_files["DHCP hook"], "DHCP NTP configuration uses iburst", errors)
     require("RETRY_DELAY=4" in ntp_files["boot sync"], "NTP retry delay is too aggressive", errors)
+    require(
+        "ready_to_connect_ha" not in ntp_files["boot sync"],
+        "NTP startup still plays the Home Assistant onboarding prompt",
+        errors,
+    )
     require("-p 1" in ntp_files["initial-sync defaults"], "initial NTP sync sends multiple samples", errors)
 
     match = re.search(r"^TATER_LINUX_SATELLITE_VERSION = ([0-9a-f]{40})$", package_mk, re.MULTILINE)

@@ -1,0 +1,32 @@
+diff --git a/linux_voice_assistant/api_server.py b/linux_voice_assistant/api_server.py
+index 4772802..a212893 100644
+--- a/linux_voice_assistant/api_server.py
++++ b/linux_voice_assistant/api_server.py
+@@ -8,7 +8,6 @@ from collections.abc import Iterable
+ from typing import TYPE_CHECKING, Optional
+ 
+ # pylint: disable=no-name-in-module
+-from aioesphomeapi._frame_helper.packets import make_plain_text_packets
+ from aioesphomeapi.api_pb2 import (  # type: ignore[attr-defined]
+     AuthenticationRequest,
+     AuthenticationResponse,
+@@ -83,16 +82,9 @@ class APIServer(asyncio.Protocol):
+             self.send_messages(msgs)
+ 
+     def send_messages(self, msgs: Iterable[message.Message]):
+-        if self._writelines is None or not msgs:
+-            return
+-
+-        packets = [(PROTO_TO_MESSAGE_TYPE[msg.__class__], msg.SerializeToString()) for msg in msgs]
+-        packet_bytes = make_plain_text_packets(packets)
+-        if self._loop is not None and self._loop_thread_id is not None and threading.get_ident() != self._loop_thread_id:
+-            self._loop.call_soon_threadsafe(self._writelines, packet_bytes)
+-            return
+-
+-        self._writelines(packet_bytes)
++        # Tater native carries responses over its outbound WebSocket. The
++        # production image has no legacy TCP listener or packet sender.
++        return
+ 
+     def connection_made(self, transport) -> None:
+         self._transport = transport

@@ -45,7 +45,14 @@ if [ -s "$TOKEN_FILE" ] && [ -n "$PAIRING_CODE" ]; then
     PAIRING_CODE=
 fi
 
-[ -n "$WAKE_WORD" ] || WAKE_WORD=okay_nabu
+WAKE_MODEL=/usr/lib/python3.11/site-packages/wakewords/$WAKE_WORD.tflite
+if [ -z "$WAKE_WORD" ] || [ ! -f "$WAKE_MODEL" ]; then
+    WAKE_WORD=hey_tater
+    temporary=$(mktemp "$CONFIG.XXXXXX")
+    jq --arg wake_word "$WAKE_WORD" '.wake_word = $wake_word' "$CONFIG" > "$temporary"
+    chmod 600 "$temporary"
+    mv "$temporary" "$CONFIG"
+fi
 [ -n "$MIC_VOLUME" ] || MIC_VOLUME=100
 [ -n "$MIC_AUTO_GAIN" ] || MIC_AUTO_GAIN=0
 [ -n "$MIC_NOISE_SUPPRESSION" ] || MIC_NOISE_SUPPRESSION=0
@@ -63,7 +70,6 @@ fi
 
 set -- /usr/bin/linux-voice-assistant \
     --name "$FRIENDLY_NAME" \
-    --host 127.0.0.1 \
     --network-interface wlan0 \
     --tater-url "$SERVER_URL" \
     --tater-token-file "$TOKEN_FILE" \

@@ -16,9 +16,10 @@ tree, audio routing, LEDs, and recovery image format.
 ```text
 ThirdReality Amlogic BSP / Buildroot
 ├── Tater Linux Voice (pinned Git commit)
-│   ├── local wake word and microphone capture
+│   ├── local Hey Tater wake word and microphone capture
 │   ├── outbound authenticated Tater WebSocket
-│   └── localhost peripheral API
+│   ├── timers, live settings, and signed OTA
+│   └── localhost hardware API
 ├── ThirdReality hardware bridge
 │   ├── LED ring
 │   ├── home and mute buttons
@@ -59,7 +60,7 @@ For a disposable development build:
 ```sh
 ./script/generate_development_ota_key.sh
 TATER_SWUPDATE_PRIVATE_KEY_FILE=.secrets/swupdate-development-private.pem \
-  ./go --docker trspk 0.1.0
+  ./go --docker trspk 0.1.1
 ```
 
 Artifacts are written to `image/` as an Amlogic USB-burn image and a signed
@@ -100,6 +101,5 @@ python3 -m unittest discover -s tests -v
 
 - Board support: [thirdreality/voice-music-assistant](https://github.com/thirdreality/voice-music-assistant)
 - Voice application: [TaterTotterson/Tater-Linux-Satellite](https://github.com/TaterTotterson/Tater-Linux-Satellite)
-- Original Linux voice application: [OHF-Voice/linux-voice-assistant](https://github.com/OHF-Voice/linux-voice-assistant)
 
 This fork retains the upstream Apache-2.0 license.

@@ -49,10 +49,9 @@ if [ -x $NTPDATE_BIN ] ; then
         echo "ntpdate FAILED after $MAX_RETRIES attempts, starting services anyway"
     fi
 
-    if [ ! -f /data/first_wifi_connected ]; then
-        touch /data/first_wifi_connected
-        paplay /usr/share/thirdreality/audio/ready_to_connect_ha.wav &
-    fi
+    # Tater-native pairing is handled by the voice client. Setup guidance is
+    # announced only while the local provisioning hotspot is active.
+    [ -f /data/first_wifi_connected ] || touch /data/first_wifi_connected
     #If the platform have RTC, we will write back to RTC HW
     if [ -e /dev/rtc ] || [ -e /dev/rtc0 ] || [ -e /dev/misc/rtc ]; then
         hwclock -w -u

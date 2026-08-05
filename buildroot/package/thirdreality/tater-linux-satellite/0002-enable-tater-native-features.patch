@@ -1,0 +1,133 @@
+diff --git a/linux_voice_assistant/__main__.py b/linux_voice_assistant/__main__.py
+index 558e630..b117fb3 100644
+--- a/linux_voice_assistant/__main__.py
++++ b/linux_voice_assistant/__main__.py
+@@ -270,6 +270,8 @@ async def main() -> None:
+         help="Enable output only mode",
+     )
+     args = parser.parse_args()
++    if not args.tater_url:
++        parser.error("--tater-url is required; this build only supports Tater native mode")
+ 
+     if args.list_input_devices:
+         print("Audio Input devices:")
+@@ -338,7 +340,6 @@ async def main() -> None:
+ 
+     # Resolve esphome version
+     esphome_version = get_esphome_version()
+-    print(f"ESPHome api version: {esphome_version}")
+ 
+     # Resolve download dir
+     args.download_dir = Path(args.download_dir)
+diff --git a/linux_voice_assistant/peripheral_api.py b/linux_voice_assistant/peripheral_api.py
+index 26da5ed..8e23169 100644
+--- a/linux_voice_assistant/peripheral_api.py
++++ b/linux_voice_assistant/peripheral_api.py
+@@ -267,7 +267,7 @@ class PeripheralAPIServer:
+                 "data": {
+                     "muted": state.muted,
+                     "volume": round(state.volume, 3),
+-                    "ha_connected": state.connected,
++                    "tater_connected": state.connected,
+                     "last_stt_text": self._last_stt_text,
+                     "last_tts_text": self._last_tts_text,
+                 },
+diff --git a/linux_voice_assistant/tater_native.py b/linux_voice_assistant/tater_native.py
+index 7791ad0..af120f9 100644
+--- a/linux_voice_assistant/tater_native.py
++++ b/linux_voice_assistant/tater_native.py
+@@ -34,6 +34,7 @@ from aioesphomeapi.model import VoiceAssistantEventType
+ from google.protobuf import message
+ 
+ from .peripheral_api import LVAEvent
++from .tater_features import TaterFeatureManager
+ 
+ _LOGGER = logging.getLogger(__name__)
+ 
+@@ -144,7 +145,7 @@ class TaterNativeClient:
+         firmware_version: str = "",
+         reconnect_seconds: float = DEFAULT_RECONNECT_SECONDS,
+         heartbeat_seconds: float = DEFAULT_HEARTBEAT_SECONDS,
+-        capabilities: Optional[dict[str, bool]] = None,
++        capabilities: Optional[dict[str, Any]] = None,
+     ) -> None:
+         self.satellite = satellite
+         self.state = satellite.state
+@@ -173,7 +174,10 @@ class TaterNativeClient:
+             "motion": self.board.lower().startswith("reachy"),
+         }
+         if capabilities:
+-            self.capabilities.update({str(key): bool(value) for key, value in capabilities.items()})
++            self.capabilities.update({str(key): value for key, value in capabilities.items()})
++
++        self.features = TaterFeatureManager(self)
++        self.capabilities.update(self.features.capabilities)
+ 
+         self._loop: Optional[asyncio.AbstractEventLoop] = None
+         self._stop: Optional[asyncio.Event] = None
+@@ -411,6 +415,7 @@ class TaterNativeClient:
+         self._connected = True
+         self.state.connected = True
+         self.state.satellite = self.satellite
++        self.features.connected()
+         self.satellite._emit(LVAEvent.CONNECTION, {"status": "connected"})  # pylint: disable=protected-access
+         _LOGGER.info(
+             "Connected to Tater native satellite API selector=%s device_id=%s board=%s room=%s",
+@@ -426,13 +431,13 @@ class TaterNativeClient:
+         self._voice_start_pending = False
+         self._audio_preroll.clear()
+         self._clear_outgoing()
++        self.features.disconnected()
+         if not was_connected:
+             return
+         try:
+             self.satellite.connection_lost(error)
+         finally:
+-            # VoiceSatelliteProtocol normally gets reconstructed by the ESPHome
+-            # server after a disconnect. Native mode reconnects the same object.
++            # Tater native mode reconnects the same local audio state machine.
+             self.state.satellite = self.satellite
+             self.state.connected = False
+ 
+@@ -465,15 +470,17 @@ class TaterNativeClient:
+             elif bool(getattr(self.satellite, "_pipeline_active", False)):
+                 tts_response_active = bool(getattr(self.satellite, "tts_response_active", False))
+                 state = "speaking" if tts_response_active or bool(getattr(self.satellite, "_tts_played", False)) else "thinking"
++            status_payload = {
++                "state": state,
++                "uptime_s": int(time.monotonic() - self._started_monotonic),
++                "connected": True,
++                "audio_tx_dropped": self._audio_drops,
++            }
++            status_payload.update(self.features.status())
+             self._queue_frame(
+                 _json_frame(
+                     "status",
+-                    {
+-                        "state": state,
+-                        "uptime_s": int(time.monotonic() - self._started_monotonic),
+-                        "connected": True,
+-                        "audio_tx_dropped": self._audio_drops,
+-                    },
++                    status_payload,
+                 )
+             )
+ 
+@@ -482,6 +489,9 @@ class TaterNativeClient:
+         raw_payload = body.get("payload")
+         payload: dict[str, Any] = raw_payload if isinstance(raw_payload, dict) else {}
+ 
++        if self.features.handle_message(body):
++            return
++
+         if message_type == "voice.event":
+             event_type, data = _voice_event(payload.get("event"), payload.get("data"))
+             if event_type is not None:
+@@ -538,6 +548,7 @@ class TaterNativeClient:
+             _LOGGER.error("Tater native satellite error: %s", payload.get("error") or payload.get("message") or "unknown error")
+ 
+     async def close(self) -> None:
++        await self.features.close()
+         stop = self._stop
+         if stop is not None:
+             stop.set()

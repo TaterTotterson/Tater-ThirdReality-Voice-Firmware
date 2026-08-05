@@ -1,0 +1,166 @@
+--- a/linux_voice_assistant/__main__.py
++++ b/linux_voice_assistant/__main__.py
+@@ -1,7 +1,6 @@
+ #!/usr/bin/env python3
+ import argparse
+ import asyncio
+-import errno
+ import json
+ import logging
+ import sys
+@@ -172,16 +171,9 @@
+         "--network-interface",
+         help="Network interface the application listens on (default: auto-detected by gateway)",
+     )
+-    # Note that default port is also set in docker-entrypoint.sh
+     parser.add_argument(
+-        "--port",
+-        type=int,
+-        default=6053,
+-        help="Port the application is listening on (default: 6053)",
+-    )
+-    parser.add_argument(
+         "--tater-url",
+-        help="Tater server or native satellite WebSocket URL. Enables outbound Tater-native mode instead of the ESPHome server.",
++        help="Tater server or native satellite WebSocket URL",
+     )
+     parser.add_argument(
+         "--tater-token",
+@@ -494,82 +486,25 @@
+         state.peripheral_api = peripheral_api
+ 
+     # ------------------------------------------------------------------
+-    # Satellite transport: outbound Tater native client or ESPHome TCP server.
++    # Satellite transport: outbound Tater native client only.
+     # ------------------------------------------------------------------
+-    loop = asyncio.get_running_loop()
+-    server = None
+-    native_client: Optional[TaterNativeClient] = None
+-
+-    if args.tater_url:
+-        try:
+-            native_satellite = VoiceSatelliteProtocol(state)
+-            native_client = TaterNativeClient(
+-                native_satellite,
+-                url=args.tater_url,
+-                token=args.tater_token,
+-                token_file=args.tater_token_file or None,
+-                device_id=args.tater_device_id or state.name,
+-                device_name=state.friendly_name,
+-                board=args.tater_board,
+-                room=args.tater_room,
+-                firmware_version=state.version,
+-                reconnect_seconds=args.tater_reconnect_seconds,
+-            )
+-        except Exception:
+-            _LOGGER.critical("Fatal error initializing Tater native satellite transport", exc_info=True)
+-            sys.exit(1)
+-    else:
+-        max_attempts = 15
+-        attempt = 1
+-
+-        # Validate VoiceSatelliteProtocol initialization BEFORE starting server
+-        # This catches errors like missing imports or broken initialization immediately
+-        # instead of failing silently only when first client connects
+-        _LOGGER.debug("Validating VoiceSatelliteProtocol initialization...")
+-        try:
+-            # Create test instance to run complete __init__ code path
+-            test_protocol = VoiceSatelliteProtocol(state)
+-            # Cleanup state reference
+-            test_protocol.state.satellite = None
+-            del test_protocol
+-            _LOGGER.debug("✅ VoiceSatelliteProtocol validation successful")
+-        except Exception:
+-            _LOGGER.critical("❌ FATAL ERROR in VoiceSatelliteProtocol initialization!", exc_info=True)
+-            _LOGGER.critical("Program will exit immediately - fix the error above first!")
+-            sys.exit(1)
+-
+-        while attempt <= max_attempts:
+-            try:
+-                server = await loop.create_server(
+-                    lambda: VoiceSatelliteProtocol(state),
+-                    host=host_ip_address,
+-                    port=args.port,
+-                )
+-                break  # connection successful, exit the loop
+-            except OSError as err:
+-                message = err.strerror or str(err)
+-                if err.errno == errno.EADDRINUSE:
+-                    message = "address already in use"
+-                if attempt < max_attempts:
+-                    _LOGGER.warning(
+-                        "Attempt %d/%d failed to bind on address (%s, %s): %s. Retrying in 1 second...",
+-                        attempt,
+-                        max_attempts,
+-                        host_ip_address,
+-                        args.port,
+-                        message,
+-                    )
+-                    await asyncio.sleep(1)
+-                    attempt += 1
+-                else:
+-                    _LOGGER.exception(
+-                        "All %d attempts failed to bind on address (%s, %s): %s",
+-                        max_attempts,
+-                        host_ip_address,
+-                        args.port,
+-                        message,
+-                    )
+-                    sys.exit(1)
++    try:
++        native_satellite = VoiceSatelliteProtocol(state)
++        native_client = TaterNativeClient(
++            native_satellite,
++            url=args.tater_url,
++            token=args.tater_token,
++            token_file=args.tater_token_file or None,
++            device_id=args.tater_device_id or state.name,
++            device_name=state.friendly_name,
++            board=args.tater_board,
++            room=args.tater_room,
++            firmware_version=state.version,
++            reconnect_seconds=args.tater_reconnect_seconds,
++        )
++    except Exception:
++        _LOGGER.critical("Fatal error initializing Tater native satellite transport", exc_info=True)
++        sys.exit(1)
+ 
+     # ------------------------------------------------------------------
+     # Audio processing thread
+@@ -589,13 +524,7 @@
+         await peripheral_api.start()
+         await peripheral_api.emit_event(LVAEvent.CONNECTION, {"status": "getting_started"})
+ 
+-        # Give peripherals a window to connect and register their Light
+-        # entities before HA enumerates over the ESPHome native API. The
+-        # ESPHome server is bound but not yet serving (serve_forever runs
+-        # below), so any HA connection sits queued in the kernel for the
+-        # duration of this wait. Peripherals that register later still
+-        # work, but the new entities only show up in HA after the
+-        # integration reconnects.
++        # Give local hardware peripherals a window to connect and register.
+         if args.peripheral_startup_wait > 0:
+             _LOGGER.info(
+                 "Waiting %.1fs for peripherals to register entities…",
+@@ -604,18 +533,12 @@
+             await asyncio.sleep(args.peripheral_startup_wait)
+ 
+     try:
+-        if native_client is not None:
+-            _LOGGER.info("Tater native satellite mode started (url=%s, device_id=%s)", native_client.url, native_client.device_id)
+-            await native_client.run_forever()
+-        else:
+-            async with server:  # type: ignore[union-attr]
+-                _LOGGER.info("Server started (host=%s, port=%s)", host_ip_address, args.port)
+-                await server.serve_forever()  # type: ignore[union-attr]
++        _LOGGER.info("Tater native satellite mode started (url=%s, device_id=%s)", native_client.url, native_client.device_id)
++        await native_client.run_forever()
+     except KeyboardInterrupt:
+         pass
+     finally:
+-        if native_client is not None:
+-            await native_client.close()
++        await native_client.close()
+         process_audio_stop_event.set()
+         state.audio_queue.put_nowait(None)
+         process_audio_thread.join(timeout=3.0)

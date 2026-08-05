@@ -234,7 +234,7 @@ class ThirdRealityBridge:
             # reconnects, so do not overwrite it with a stale process snapshot.
             if self.last_muted:
                 show_animation("mics-off_on.animation", True)
-            elif not bool(payload.get("ha_connected", False)):
+            elif not bool(payload.get("tater_connected", False)):
                 show_animation("error.animation", True)
             return
 

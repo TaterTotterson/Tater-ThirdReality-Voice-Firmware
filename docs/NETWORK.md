@@ -25,9 +25,11 @@ Build-time source and dependency downloads are not device runtime traffic.
   WebSocket hello reports the device ID, friendly name, board, firmware version,
   room, and capabilities. Microphone audio is sent only after a local wake or
   press-to-talk event starts a voice session.
-- The authenticated Tater session can provide TTS/media URLs and external wake
-  word model URLs. The device fetches these only as part of an authenticated
-  command or configuration from that Tater server.
+- The authenticated Tater session can provide TTS/media URLs, external wake
+  word model URLs, and signed firmware URLs. The device fetches these only as
+  part of an authenticated command or configuration from that Tater server.
+  Firmware downloads are accepted by SWUpdate only when their signature matches
+  the Tater public key embedded at build time.
 - The Tater peripheral WebSocket is loopback-only at `127.0.0.1:6055`.
 - When unconfigured, Wi-Fi provisioning uses an open local
   `Tater-Setup-XXXX` AP on `192.168.4.1`. DHCP leases are limited to
@@ -42,11 +44,11 @@ and media playback use the authenticated Tater connection instead.
 
 ## Retained but inactive vendor code
 
-The source tree retains ThirdReality's Python and C++ voice-assistant packages
-for upstream comparison. Both contain an OTA client for
-`ota.cloud.3reality.com`, but neither package is selected by the Tater production
-defconfig. The active Tater client advertises no remote OTA capability; signed
-firmware updates are manual.
+The legacy ThirdReality Python and C++ assistant packages, including their
+vendor OTA client for `ota.cloud.3reality.com`, are not present in this fork.
+The active Tater client does not call the vendor OTA service. Its remote OTA
+path accepts only a URL delivered over the authenticated Tater session and
+verifies the signed SWUpdate archive locally.
 
 `script/validate_firmware.py` fails if either legacy assistant is selected, a
 known Chinese NTP endpoint is reintroduced, a third-party connectivity probe is

@@ -1,0 +1,8 @@
+config BR2_PACKAGE_TATER_S420_FIRMWARE
+    bool "Tater S420 satellite firmware"
+    default n
+    select BR2_PACKAGE_TATER_LINUX_SATELLITE
+    help
+        Tater-native firmware integration for the ThirdReality S420 voice
+        satellite. Installs the setup hotspot, Tater runtime supervisor,
+        hardware bridge, and device audio prompts.

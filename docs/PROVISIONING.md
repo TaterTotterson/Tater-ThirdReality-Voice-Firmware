@@ -5,7 +5,8 @@ It does not include Bluetooth or Improv provisioning.
 
 ## First boot
 
-1. Power on an unconfigured speaker.
+1. Power on an unconfigured speaker. It announces: “This Tater satellite is
+   ready for setup. Connect to the Tater Setup Wi-Fi hotspot to continue.”
 2. Join the open `Tater-Setup-XXXX` Wi-Fi network, where `XXXX` is derived from
    the final four hexadecimal digits of the speaker's Wi-Fi MAC address.
 3. Most phones open the captive page automatically. If not, browse to
@@ -50,13 +51,14 @@ tater-configure \
 ```
 
 Inspect the redacted configuration with `tater-configure --show`. Restart the
-voice service with `/etc/init.d/S99ha-speaker voice-assistant restart`.
+voice service with `/etc/init.d/S99tater-satellite voice-assistant restart`.
 
 ## Persistent data
 
 The paired device token is stored at `/data/conf/tater-device-token` with mode
 0600. Settings live in `/data/conf/tater.json`; audio preferences remain in
-`/data/conf/tater-preferences.json`. After a successful pairing, the one-time
+`/data/conf/tater-preferences.json`, and live Tater settings are persisted in
+`/data/conf/tater-live-settings.json`. After a successful pairing, the one-time
 pairing code is erased from the settings on the next service start. The Wi-Fi
 station profile is stored in `/etc/wpa_supplicant.conf` with mode 0600.
 

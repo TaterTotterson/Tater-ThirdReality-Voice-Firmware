@@ -5,15 +5,14 @@
 ################################################################################
 
 # Keep this immutable. Use script/update_tater_linux_source.sh to advance it.
-TATER_LINUX_SATELLITE_VERSION = 88b02994baf1843cb529d12d0cf5e54f39be61aa
+TATER_LINUX_SATELLITE_VERSION = 66a4f8d3d217145feed546507b0360eb781f01da
 TATER_LINUX_SATELLITE_SITE = $(call github,TaterTotterson,Tater-Linux-Satellite,$(TATER_LINUX_SATELLITE_VERSION))
 TATER_LINUX_SATELLITE_LICENSE = Apache-2.0
 TATER_LINUX_SATELLITE_LICENSE_FILES = LICENSE
 TATER_LINUX_SATELLITE_SETUP_TYPE = pep517
 
 TATER_LINUX_SATELLITE_DEPENDENCIES = \
-	host-python-setuptools-scm \
-	python-aioesphomeapi \
+	python-tater-protocol-compat \
 	python-getmac \
 	python-mpv \
 	python-netifaces-2 \
@@ -24,18 +23,37 @@ TATER_LINUX_SATELLITE_DEPENDENCIES = \
 	python-websockets \
 	python-webrtc-noise-gain
 
-# GitHub source archives do not contain .git metadata. Give setuptools-scm a
-# deterministic PEP 440 version while keeping the full source SHA above.
-TATER_LINUX_SATELLITE_ENV = SETUPTOOLS_SCM_PRETEND_VERSION=1.1.12.post23
-
 TATER_LINUX_SATELLITE_PYTHON_SITE = $(TARGET_DIR)/usr/lib/python$(PYTHON3_VERSION_MAJOR)/site-packages
 TATER_LINUX_SATELLITE_PKGDIR = $(TOPDIR)/package/thirdreality/tater-linux-satellite
+
+# The pinned upstream runtime still names the voice protobuf schema after its
+# historical transport. This production build uses a private Tater-only module
+# name and removes legacy product terminology before compiling the wheel.
+define TATER_LINUX_SATELLITE_USE_TATER_PROTOCOL_COMPAT
+	$(SED) 's/aioesphomeapi/tater_protocol_compat/g' \
+		$(@D)/linux_voice_assistant/*.py
+	$(SED) 's/get_esphome_version/get_protocol_compat_version/g; s/esphome_version/protocol_compat_version/g' \
+		$(@D)/linux_voice_assistant/*.py
+	$(SED) 's/ESPHomeEntity/TaterEntity/g; s/ESPHome/legacy API/g; s/Home Assistant/legacy controller/g' \
+		$(@D)/linux_voice_assistant/*.py
+	$(SED) 's/Resolve esphome version/Resolve protocol compatibility version/g; s/COMMANDS FROM HOME ASSISTANT/COMMANDS FROM TATER/g' \
+		$(@D)/linux_voice_assistant/*.py
+endef
+TATER_LINUX_SATELLITE_POST_PATCH_HOOKS += TATER_LINUX_SATELLITE_USE_TATER_PROTOCOL_COMPAT
 
 define TATER_LINUX_SATELLITE_INSTALL_RESOURCES
 	mkdir -p $(TATER_LINUX_SATELLITE_PYTHON_SITE)/wakewords
 	mkdir -p $(TATER_LINUX_SATELLITE_PYTHON_SITE)/sounds
 	cp -a $(@D)/wakewords/. $(TATER_LINUX_SATELLITE_PYTHON_SITE)/wakewords/
 	cp -a $(@D)/sounds/. $(TATER_LINUX_SATELLITE_PYTHON_SITE)/sounds/
+	$(INSTALL) -D -m 0644 $(TATER_LINUX_SATELLITE_PKGDIR)/files/wakewords/hey_tater.json \
+		$(TATER_LINUX_SATELLITE_PYTHON_SITE)/wakewords/hey_tater.json
+	$(INSTALL) -D -m 0644 $(TATER_LINUX_SATELLITE_PKGDIR)/files/wakewords/hey_tater.tflite \
+		$(TATER_LINUX_SATELLITE_PYTHON_SITE)/wakewords/hey_tater.tflite
+	find $(TATER_LINUX_SATELLITE_PYTHON_SITE)/wakewords -type f \
+		\( -name 'hey_home_assistant.*' -o -iname '*nabu*' \) -delete
+	$(INSTALL) -D -m 0644 $(TATER_LINUX_SATELLITE_PKGDIR)/files/tater_features.py \
+		$(TATER_LINUX_SATELLITE_PYTHON_SITE)/linux_voice_assistant/tater_features.py
 	printf '%s\n' 'tater-thirdreality-$(TATER_LINUX_SATELLITE_VERSION)' > \
 		$(TATER_LINUX_SATELLITE_PYTHON_SITE)/version.txt
 	$(INSTALL) -D -m 0755 $(TATER_LINUX_SATELLITE_PKGDIR)/files/tater-satellite-launcher \

@@ -69,9 +69,10 @@
 /usr/bin/avahi-resolve-address
 /usr/bin/avahi-resolve-host-name
 /usr/bin/avahi-set-host-name
+/usr/bin/aioesphomeapi-discover
+/usr/bin/aioesphomeapi-logs
 /usr/bin/dbus-cleanup-sockets
 /usr/bin/dbus-monitor
 /usr/bin/dbus-run-session
-/usr/bin/dbus-send
 /usr/bin/dbus-test-tool
 /usr/bin/dbus-update-activation-environment
