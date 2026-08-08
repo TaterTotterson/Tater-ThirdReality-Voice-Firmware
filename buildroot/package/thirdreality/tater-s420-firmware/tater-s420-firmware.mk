@@ -4,7 +4,7 @@
 #
 ################################################################################
 
-TATER_S420_FIRMWARE_VERSION = 0.1.1
+TATER_S420_FIRMWARE_VERSION = 0.2.0
 TATER_S420_FIRMWARE_SITE = $(TOPDIR)/package/thirdreality/tater-s420-firmware
 TATER_S420_FIRMWARE_SITE_METHOD = local
 
@@ -31,6 +31,8 @@ define TATER_S420_FIRMWARE_INSTALL_TARGET_CMDS
 	$(INSTALL) -D -m 0755 $(@D)/script/wifi_connect ${REALITY_DIR}/script/wifi_connect
 	$(INSTALL) -D -m 0755 $(@D)/script/netmonitor ${REALITY_DIR}/script/netmonitor
 	$(INSTALL) -D -m 0755 $(@D)/script/S99tater-satellite $(TARGET_DIR)/etc/init.d/S99tater-satellite
+	printf '%s\n' 'tater-thirdreality-$(IMAGE_VERSION)' > \
+		$(TARGET_DIR)/usr/lib/python$(PYTHON3_VERSION_MAJOR)/site-packages/version.txt
 
 	@echo "firmwareVersion is $(IMAGE_VERSION)"
 	@jq '.device.firmwareVersion = "$(IMAGE_VERSION)"' $(TARGET_DIR)/usr/share/thirdreality/conf/device.json > \

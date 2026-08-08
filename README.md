@@ -25,6 +25,7 @@ ThirdReality Amlogic BSP / Buildroot
 │   ├── home and mute buttons
 │   └── system volume and microphone mute
 └── Tater-native voice and media playback
+    └── audio-session v2 stereo and synchronized multi-room playback
 ```
 
 The application source is pinned in
@@ -60,12 +61,15 @@ For a disposable development build:
 ```sh
 ./script/generate_development_ota_key.sh
 TATER_SWUPDATE_PRIVATE_KEY_FILE=.secrets/swupdate-development-private.pem \
-  ./go --docker trspk 0.1.1
+  ./go --docker trspk 0.2.0
 ```
 
 Artifacts are written to `image/` as an Amlogic USB-burn image and a signed
 SWUpdate package. Production builds must use an externally escrowed OTA signing
 key; see [the security model](docs/SECURITY.md).
+
+For release packaging, first-install requirements, artifact verification, and
+recovery instructions, see [Flashing the S420](docs/FLASHING.md).
 
 ## Provision and operate
 

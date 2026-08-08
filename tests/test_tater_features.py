@@ -1,12 +1,15 @@
 import asyncio
 from enum import Enum
+import hashlib
 import importlib.util
+import io
 import json
 from pathlib import Path
 import sys
 import tempfile
 import types
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,12 +24,29 @@ class _Event(str, Enum):
     IDLE = "idle"
 
 
+class _WakeWordType(str, Enum):
+    MICRO_WAKE_WORD = "micro"
+
+
+class _PackageWakeWord:
+    def __init__(self, **values) -> None:
+        self.__dict__.update(values)
+
+    def load(self):
+        config = json.loads(Path(self.wake_word_path).read_text(encoding="utf-8"))
+        return types.SimpleNamespace(id=Path(config["model"]).stem)
+
+
 package = types.ModuleType("linux_voice_assistant")
 package.__path__ = [str(FEATURES_PATH.parent)]
 peripheral = types.ModuleType("linux_voice_assistant.peripheral_api")
 peripheral.LVAEvent = _Event
+models = types.ModuleType("linux_voice_assistant.models")
+models.AvailableWakeWord = _PackageWakeWord
+models.WakeWordType = _WakeWordType
 sys.modules.setdefault("linux_voice_assistant", package)
 sys.modules.setdefault("linux_voice_assistant.peripheral_api", peripheral)
+sys.modules.setdefault("linux_voice_assistant.models", models)
 spec = importlib.util.spec_from_file_location(
     "linux_voice_assistant.tater_features", FEATURES_PATH
 )
@@ -42,6 +62,19 @@ class _Player:
         self.played = []
         self.done_callback = None
         self.duck_factor = None
+        self.synchronized_controls_available = True
+        self.prepared = []
+        self.snapshot = {
+            "loaded": True,
+            "position_seconds": 0.0,
+            "buffered_seconds": 2.0,
+            "seeking": False,
+            "rebuffering": False,
+            "paused": False,
+            "speed": 1.0,
+        }
+        self.speed = 1.0
+        self.resume_count = 0
 
     def set_volume(self, value):
         self.volume = value
@@ -49,6 +82,29 @@ class _Player:
     def play(self, url, done_callback=None, stop_first=False):
         self.played.append((url, stop_first))
         self.done_callback = done_callback
+
+    def prepare_synchronized(self, url, *, channel="stereo", loop=False, done_callback=None):
+        self.prepared.append((url, channel, loop))
+        self.done_callback = done_callback
+        self.snapshot["paused"] = True
+
+    def synchronized_snapshot(self):
+        return dict(self.snapshot)
+
+    def seek_synchronized(self, position_seconds):
+        self.snapshot["position_seconds"] = position_seconds
+
+    def set_synchronized_speed(self, speed):
+        self.speed = speed
+        self.snapshot["speed"] = speed
+
+    def reset_synchronized(self):
+        self.speed = 1.0
+        self.snapshot["speed"] = 1.0
+
+    def resume(self):
+        self.resume_count += 1
+        self.snapshot["paused"] = False
 
     def stop(self):
         callback = self.done_callback
@@ -69,13 +125,26 @@ class _Preferences:
         self.wake_word_1_sensitivity = None
 
 
+class _AvailableWakeWord:
+    def __init__(self, wake_word="Hey Tater") -> None:
+        self.wake_word = wake_word
+        self.loaded = object()
+        self.load_count = 0
+
+    def load(self):
+        self.load_count += 1
+        return self.loaded
+
+
 class _State:
     def __init__(self) -> None:
         self.music_player = _Player()
         self.tts_player = _Player()
         self.stop_word = types.SimpleNamespace(id="stop")
         self.active_wake_words = {"hey_tater"}
-        self.available_wake_words = {"hey_tater": object()}
+        self.available_wake_words = {"hey_tater": _AvailableWakeWord()}
+        self.wake_words = {}
+        self.download_dir = Path(tempfile.gettempdir())
         self.preferences = _Preferences()
         self.wake_word_1_threshold = 0.97
         self.wake_words_changed = False
@@ -127,24 +196,33 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.original_settings_path = tater_features._SETTINGS_PATH
+        self.original_ota_path = tater_features._OTA_PATH
         tater_features._SETTINGS_PATH = Path(self.temporary.name) / "settings.json"
+        tater_features._OTA_PATH = Path(self.temporary.name) / "software.swu"
         self.client = _Client()
         self.manager = tater_features.TaterFeatureManager(self.client)
 
     async def asyncTearDown(self) -> None:
         await self.manager.close()
         tater_features._SETTINGS_PATH = self.original_settings_path
+        tater_features._OTA_PATH = self.original_ota_path
         self.temporary.cleanup()
 
     def _messages(self, message_type):
         return [frame for frame in self.client.frames if frame["type"] == message_type]
 
-    async def test_capabilities_do_not_claim_synchronized_audio(self) -> None:
+    async def test_capabilities_claim_tater_audio_session_v2(self) -> None:
         self.assertTrue(self.manager.capabilities["timers"])
         self.assertTrue(self.manager.capabilities["ota"])
         self.assertTrue(self.manager.capabilities["live_settings"])
-        self.assertFalse(self.manager.capabilities["synchronized_media_sessions"])
-        self.assertFalse(self.manager.capabilities["media_drift_correction"])
+        self.assertTrue(self.manager.capabilities["custom_wake_words"])
+        self.assertTrue(self.manager.capabilities["status_led"])
+        self.assertTrue(self.manager.capabilities["synchronized_media_sessions"])
+        self.assertTrue(self.manager.capabilities["stereo_channel_selection"])
+        self.assertTrue(self.manager.capabilities["media_playhead_telemetry"])
+        self.assertTrue(self.manager.capabilities["media_drift_correction"])
+        self.assertTrue(self.manager.capabilities["media_rate_slew"])
+        self.assertEqual(self.manager.capabilities["audio_session_version"], 2)
 
     async def test_timer_start_list_and_cancel_round_trip(self) -> None:
         self.assertTrue(
@@ -201,6 +279,168 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("wake_threshold", self.manager.settings)
         self.assertNotIn("wake_engine", self.manager.settings)
 
+    async def test_installed_wake_word_is_loaded_and_activated(self) -> None:
+        self.client.state.active_wake_words.clear()
+        self.manager.handle_message(
+            {
+                "type": "settings",
+                "payload": {"wake_engine": "micro_wake_word", "wake_word": "hey_tater"},
+            }
+        )
+        self.assertEqual(self.client.state.active_wake_words, {"hey_tater"})
+        self.assertIn("hey_tater", self.client.state.wake_words)
+        self.assertEqual(self.client.state.preferences.active_wake_words, ["hey_tater"])
+        self.assertTrue(self.client.state.wake_words_changed)
+
+    async def test_custom_wake_word_downloads_and_activates_live(self) -> None:
+        available = _AvailableWakeWord("Hello Potato")
+        loaded = object()
+        with mock.patch.object(
+            tater_features,
+            "_download_custom_wake_package",
+            return_value=("tater_custom_1234", available, loaded),
+        ) as download:
+            self.manager.handle_message(
+                {
+                    "type": "settings",
+                    "payload": {
+                        "wake_engine": "micro_wake_word",
+                        "wake_word": "custom_url",
+                        "wake_word_url": "https://tater.test/hello-potato.json",
+                    },
+                }
+            )
+            await asyncio.wait_for(self.manager.wake_model_task, timeout=1)
+
+        download.assert_called_once()
+        self.assertEqual(self.client.state.active_wake_words, {"tater_custom_1234"})
+        self.assertIs(self.client.state.wake_words["tater_custom_1234"], loaded)
+        self.assertEqual(
+            self.client.state.preferences.active_wake_words,
+            ["tater_custom_1234"],
+        )
+        persisted = json.loads(tater_features._SETTINGS_PATH.read_text(encoding="utf-8"))
+        self.assertEqual(persisted["wake_word"], "custom_url")
+        self.assertEqual(
+            persisted["wake_word_url"],
+            "https://tater.test/hello-potato.json",
+        )
+        self.assertIn("Hello Potato", self._messages("log")[-1]["payload"]["message"])
+
+    async def test_custom_wake_failure_keeps_previous_model_active(self) -> None:
+        with mock.patch.object(
+            tater_features,
+            "_download_custom_wake_package",
+            side_effect=ValueError("bad manifest"),
+        ):
+            self.manager.handle_message(
+                {
+                    "type": "settings",
+                    "payload": {
+                        "wake_word": "custom_url",
+                        "wake_word_url": "https://tater.test/broken.json",
+                    },
+                }
+            )
+            await asyncio.wait_for(self.manager.wake_model_task, timeout=1)
+
+        self.assertEqual(self.client.state.active_wake_words, {"hey_tater"})
+        self.assertIn("failed", self._messages("log")[-1]["payload"]["message"].lower())
+
+    async def test_s420_led_settings_are_validated_and_persisted(self) -> None:
+        self.manager.handle_message(
+            {
+                "type": "settings",
+                "payload": {
+                    "led_brightness": 67,
+                    "led_color": "#FF5A1F",
+                    "led_listening_animation": "pulse",
+                    "led_thinking_animation": "breathe",
+                    "led_tool_call_animation": "unsupported-ring-effect",
+                    "led_replying_animation": "solid",
+                },
+            }
+        )
+        self.assertEqual(self.manager.settings["led_brightness"], 67)
+        self.assertEqual(self.manager.settings["led_color"], "#ff5a1f")
+        self.assertEqual(self.manager.settings["led_listening_animation"], "pulse")
+        self.assertEqual(self.manager.settings["led_thinking_animation"], "breathe")
+        self.assertEqual(self.manager.settings["led_replying_animation"], "solid")
+        self.assertNotIn("led_tool_call_animation", self.manager.settings)
+
+    async def test_custom_wake_package_keeps_runtime_and_preference_ids_aligned(self) -> None:
+        manifest_url = "https://tater.test/models/hello.json"
+        manifest = {
+            "type": "micro",
+            "wake_word": "Hello Potato",
+            "model": "hello.tflite",
+            "trained_languages": ["en"],
+            "micro": {"probability_cutoff": 0.92, "sliding_window_size": 5},
+        }
+        model_data = b"test-tflite-model"
+        state = types.SimpleNamespace(download_dir=Path(self.temporary.name))
+        with mock.patch.object(
+            tater_features,
+            "_download_limited",
+            side_effect=[json.dumps(manifest).encode("utf-8"), model_data],
+        ):
+            model_id, available, loaded = tater_features._download_custom_wake_package(
+                state,
+                manifest_url,
+            )
+
+        self.assertEqual(loaded.id, model_id)
+        self.assertEqual(available.id, model_id)
+        self.assertEqual(Path(available.wake_word_path).stem, model_id)
+        cached = json.loads(Path(available.wake_word_path).read_text(encoding="utf-8"))
+        self.assertEqual(Path(cached["model"]).stem, model_id)
+        self.assertEqual(
+            cached["_tater_model_sha256"],
+            tater_features.hashlib.sha256(model_data).hexdigest(),
+        )
+
+    async def test_custom_wake_package_rejects_non_web_urls(self) -> None:
+        with self.assertRaisesRegex(ValueError, "HTTP or HTTPS"):
+            tater_features._validated_web_url("file:///tmp/model.json", label="model URL")
+
+    async def test_invalid_custom_wake_update_preserves_last_good_cache(self) -> None:
+        manifest_url = "https://tater.test/models/replace.json"
+        manifest = {
+            "type": "micro",
+            "wake_word": "Hello Potato",
+            "model": "replace.tflite",
+            "micro": {"probability_cutoff": 0.9, "sliding_window_size": 5},
+        }
+        state = types.SimpleNamespace(download_dir=Path(self.temporary.name))
+        with mock.patch.object(
+            tater_features,
+            "_download_limited",
+            side_effect=[json.dumps(manifest).encode("utf-8"), b"known-good-model"],
+        ):
+            _model_id, available, _loaded = tater_features._download_custom_wake_package(
+                state,
+                manifest_url,
+            )
+        config_path = Path(available.wake_word_path)
+        model_path = config_path.with_suffix(".tflite")
+        previous_config = config_path.read_bytes()
+        previous_model = model_path.read_bytes()
+
+        class _BrokenWakeWord(_PackageWakeWord):
+            def load(self):
+                raise ValueError("invalid tflite")
+
+        with mock.patch.object(
+            tater_features,
+            "_download_limited",
+            side_effect=[json.dumps(manifest).encode("utf-8"), b"broken-model"],
+        ), mock.patch.object(models, "AvailableWakeWord", _BrokenWakeWord):
+            with self.assertRaisesRegex(ValueError, "invalid tflite"):
+                tater_features._download_custom_wake_package(state, manifest_url)
+
+        self.assertEqual(config_path.read_bytes(), previous_config)
+        self.assertEqual(model_path.read_bytes(), previous_model)
+
     async def test_continued_chat_setting_applies_when_response_has_no_override(self) -> None:
         self.manager.handle_message(
             {"type": "settings", "payload": {"continued_chat": True}}
@@ -227,6 +467,8 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
                 },
             }
         )
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
         self.assertEqual(self.manager.media_session_id, "session-1")
         self.assertEqual(self.client.state.music_player.volume, 55)
         self.assertTrue(self._messages("media.session.started"))
@@ -247,6 +489,110 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.client.state.music_player.duck_factor)
         self.assertTrue(self._messages("audio.overlay.finished"))
 
+    async def test_synchronized_media_prepare_commit_channel_and_playhead(self) -> None:
+        original_interval = tater_features._MEDIA_PLAYHEAD_INTERVAL_SECONDS
+        tater_features._MEDIA_PLAYHEAD_INTERVAL_SECONDS = 0.01
+        try:
+            self.manager.handle_message(
+                {
+                    "type": "media.session.prepare",
+                    "id": "prepare-request",
+                    "payload": {
+                        "session_id": "stereo-session",
+                        "group_id": "pair-kitchen",
+                        "media": {
+                            "url": "https://tater.test/music.flac",
+                            "volume_percent": 65,
+                            "start_position_ms": 1250,
+                        },
+                        "routing": {"channel": "left"},
+                    },
+                }
+            )
+            await asyncio.sleep(0.05)
+
+            prepared = self._messages("media.session.prepare.result")[-1]["payload"]
+            self.assertTrue(prepared["ok"])
+            self.assertEqual(prepared["reply_to"], "prepare-request")
+            self.assertEqual(prepared["sample_rate_hz"], 48000)
+            self.assertEqual(
+                self.client.state.music_player.prepared[-1],
+                ("https://tater.test/music.flac", "left", False),
+            )
+            self.assertAlmostEqual(
+                self.client.state.music_player.snapshot["position_seconds"],
+                1.25,
+            )
+            self.assertEqual(self.client.state.music_player.resume_count, 0)
+
+            start_at_us = (tater_features.time.monotonic_ns() // 1000) + 20_000
+            self.manager.handle_message(
+                {
+                    "type": "media.session.commit",
+                    "id": "commit-request",
+                    "payload": {
+                        "session_id": "stereo-session",
+                        "group_id": "pair-kitchen",
+                        "start_at_us": start_at_us,
+                    },
+                }
+            )
+            committed = self._messages("media.session.commit.result")[-1]["payload"]
+            self.assertTrue(committed["ok"])
+            self.assertEqual(self.client.state.music_player.resume_count, 0)
+
+            await asyncio.sleep(0.05)
+            started = self._messages("media.session.started")[-1]["payload"]
+            self.assertEqual(started["channel"], "left")
+            self.assertEqual(started["scheduled_start_us"], start_at_us)
+            self.assertGreaterEqual(self.client.state.music_player.resume_count, 1)
+            self.assertTrue(self._messages("media.session.playhead"))
+        finally:
+            tater_features._MEDIA_PLAYHEAD_INTERVAL_SECONDS = original_interval
+
+    async def test_synchronized_media_rate_slew_is_applied_and_reset(self) -> None:
+        self.manager.handle_message(
+            {
+                "type": "media.session.start",
+                "id": "media-request",
+                "payload": {
+                    "session_id": "session-slew",
+                    "media": {"url": "https://tater.test/music.flac"},
+                },
+            }
+        )
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        self.manager.handle_message(
+            {
+                "type": "media.session.adjust",
+                "id": "adjust-request",
+                "payload": {
+                    "session_id": "session-slew",
+                    "correction_frames": 48,
+                    "mode": "slew",
+                    "settle_ms": 100,
+                },
+            }
+        )
+        adjusted = self._messages("media.session.adjust.result")[-1]["payload"]
+        self.assertTrue(adjusted["ok"])
+        self.assertGreater(self.client.state.music_player.speed, 1.0)
+        await asyncio.sleep(0.12)
+        self.assertEqual(self.client.state.music_player.speed, 1.0)
+
+    async def test_commit_without_prepared_session_is_rejected(self) -> None:
+        self.manager.handle_message(
+            {
+                "type": "media.session.commit",
+                "id": "commit-request",
+                "payload": {"session_id": "missing", "start_at_us": 123},
+            }
+        )
+        result = self._messages("media.session.commit.result")[-1]["payload"]
+        self.assertFalse(result["ok"])
+        self.assertIn("not found", result["error"])
+
     async def test_clock_sync_replies_to_request(self) -> None:
         self.manager.handle_message(
             {
@@ -259,6 +605,114 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["reply_to"], "clock-request")
         self.assertEqual(result["server_send_us"], 9876543210123)
         self.assertGreater(result["satellite_send_us"], 0)
+
+    async def test_ota_download_is_staged_only_after_hash_and_size_verify(self) -> None:
+        firmware = b"signed-s420-update" * 4096
+        expected_sha256 = hashlib.sha256(firmware).hexdigest()
+
+        class _Response(io.BytesIO):
+            def __init__(self, data: bytes) -> None:
+                super().__init__(data)
+                self.headers = {"Content-Length": str(len(data))}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                self.close()
+
+        with mock.patch.object(
+            tater_features,
+            "urlopen",
+            return_value=_Response(firmware),
+        ):
+            actual_sha256 = self.manager._download_ota(
+                "https://updates.tater.test/s420.swu",
+                expected_sha256=expected_sha256,
+                expected_size=len(firmware),
+            )
+
+        self.assertEqual(actual_sha256, expected_sha256)
+        self.assertEqual(tater_features._OTA_PATH.read_bytes(), firmware)
+        self.assertFalse(tater_features._OTA_PATH.with_suffix(".swu.part").exists())
+
+    async def test_ota_download_rejects_hash_mismatch_without_replacing_image(self) -> None:
+        firmware = b"tampered-s420-update"
+        tater_features._OTA_PATH.write_bytes(b"previous-known-good-update")
+
+        class _Response(io.BytesIO):
+            def __init__(self, data: bytes) -> None:
+                super().__init__(data)
+                self.headers = {"Content-Length": str(len(data))}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                self.close()
+
+        with mock.patch.object(
+            tater_features,
+            "urlopen",
+            return_value=_Response(firmware),
+        ):
+            with self.assertRaisesRegex(ValueError, "SHA-256"):
+                self.manager._download_ota(
+                    "https://updates.tater.test/s420.swu",
+                    expected_sha256="0" * 64,
+                    expected_size=len(firmware),
+                )
+
+        self.assertEqual(
+            tater_features._OTA_PATH.read_bytes(),
+            b"previous-known-good-update",
+        )
+        self.assertFalse(tater_features._OTA_PATH.with_suffix(".swu.part").exists())
+
+    async def test_ota_arms_recovery_after_verified_download(self) -> None:
+        digest = "a" * 64
+        process = mock.Mock(returncode=0)
+        process.communicate = mock.AsyncMock(return_value=(b"", None))
+
+        with mock.patch.object(
+            asyncio,
+            "to_thread",
+            new=mock.AsyncMock(return_value=digest),
+        ) as download, mock.patch.object(
+            asyncio,
+            "create_subprocess_exec",
+            new=mock.AsyncMock(return_value=process),
+        ) as swupdate, mock.patch.object(
+            asyncio,
+            "sleep",
+            new=mock.AsyncMock(),
+        ), mock.patch.object(tater_features.subprocess, "Popen") as reboot:
+            await self.manager._run_ota(
+                {
+                    "url": "https://updates.tater.test/s420.swu",
+                    "sha256": digest,
+                    "size_bytes": 123456,
+                }
+            )
+
+        download.assert_awaited_once_with(
+            self.manager._download_ota,
+            "https://updates.tater.test/s420.swu",
+            expected_sha256=digest,
+            expected_size=123456,
+        )
+        swupdate.assert_awaited_once_with(
+            "/usr/bin/swupdate",
+            "-G",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        reboot.assert_called_once_with(
+            ["/sbin/reboot"],
+            stdout=tater_features.subprocess.DEVNULL,
+            stderr=tater_features.subprocess.DEVNULL,
+        )
+        self.assertEqual(self._messages("ota.status")[-1]["payload"]["status"], "rebooting")
 
 
 if __name__ == "__main__":

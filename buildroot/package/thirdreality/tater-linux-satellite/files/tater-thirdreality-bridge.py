@@ -24,9 +24,11 @@ _LOGGER = logging.getLogger("tater-thirdreality-bridge")
 PERIPHERAL_URL = "ws://127.0.0.1:6055"
 SOUND_CONFIG = Path("/data/conf/sound.json")
 SOUND_LOCK = Path("/tmp/sound_config.lock")
+LIVE_SETTINGS = Path("/data/conf/tater-live-settings.json")
 MIC_MUTE_GPIO = Path("/sys/class/gpio/gpio438/value")
 INPUT_DEVICE = Path("/dev/input/event0")
 ANIMATION_DIR = Path("/usr/share/thirdreality/animation")
+TATER_ANIMATION_DIR = Path("/data/tater/led-animations")
 
 EV_KEY = 1
 KEY_HOME = 102
@@ -35,16 +37,24 @@ CLICK_WINDOW_SECONDS = 0.5
 LONG_PRESS_SECONDS = 1.5
 
 EVENT_ANIMATIONS: dict[str, tuple[str, bool]] = {
-    "wake_word_detected": ("active-waking.animation", False),
-    "listening": ("active-waking.animation", False),
-    "thinking": ("active-thinking.animation", False),
-    "tts_speaking": ("active-talking.animation", False),
+    "wake_word_detected": ("tater-listening.animation", False),
+    "listening": ("tater-listening.animation", False),
+    "thinking": ("tater-thinking.animation", False),
+    "tts_speaking": ("tater-replying.animation", False),
     "tts_finished": ("active-ending.animation", True),
     "idle": ("active-ending.animation", True),
     "pipeline_error": ("error.animation", True),
     "disconnected": ("error.animation", True),
     "timer_ringing": ("alert.animation", False),
 }
+TATER_LED_DEFAULTS: dict[str, Any] = {
+    "led_brightness": 80,
+    "led_color": "#ff5a1f",
+    "led_listening_animation": "pulse",
+    "led_thinking_animation": "breathe",
+    "led_replying_animation": "pulse",
+}
+TATER_LED_STYLES = {"pulse", "breathe", "heartbeat", "solid"}
 PIPELINE_ACTIVE_EVENTS = {
     "wake_word_detected",
     "listening",
@@ -87,13 +97,13 @@ def read_sound_config(path: Path = SOUND_CONFIG) -> tuple[float, bool]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (FileNotFoundError, OSError, json.JSONDecodeError):
-        return 0.5, False
+        return 0.8, False
     if not isinstance(data, dict):
-        return 0.5, False
+        return 0.8, False
     try:
-        volume = clamp_volume(float(data.get("volume", 50)) / 100.0)
+        volume = clamp_volume(float(data.get("volume", 80)) / 100.0)
     except (TypeError, ValueError):
-        volume = 0.5
+        volume = 0.8
     muted = not coerce_bool(data.get("mic_mute", 1), default=True)
     return volume, muted
 
@@ -111,9 +121,9 @@ def event_animation(event: str, data: Optional[dict[str, Any]] = None) -> Option
             return "none.animation", True
         effect = str(payload.get("effect") or "").strip().lower()
         manual_effects = {
-            "listening": "active-waking.animation",
-            "thinking": "active-thinking.animation",
-            "speaking": "active-talking.animation",
+            "listening": "tater-listening.animation",
+            "thinking": "tater-thinking.animation",
+            "speaking": "tater-replying.animation",
             "alert": "alert.animation",
             "error": "error.animation",
             "muted": "mics-off_on.animation",
@@ -121,6 +131,79 @@ def event_animation(event: str, data: Optional[dict[str, Any]] = None) -> Option
         filename = manual_effects.get(effect)
         return (filename, False) if filename else None
     return EVENT_ANIMATIONS.get(event)
+
+
+def read_led_settings(path: Path = LIVE_SETTINGS) -> dict[str, Any]:
+    """Load the small set of effects the S420's single status light supports."""
+    settings = dict(TATER_LED_DEFAULTS)
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        value = {}
+    if not isinstance(value, dict):
+        value = {}
+
+    try:
+        settings["led_brightness"] = max(0, min(100, int(round(float(value.get("led_brightness", 80))))))
+    except (TypeError, ValueError):
+        pass
+    color = str(value.get("led_color") or "").strip().lower()
+    if len(color) == 7 and color.startswith("#"):
+        try:
+            int(color[1:], 16)
+            settings["led_color"] = color
+        except ValueError:
+            pass
+    for key in (
+        "led_listening_animation",
+        "led_thinking_animation",
+        "led_replying_animation",
+    ):
+        style = str(value.get(key) or "").strip().lower()
+        if style in TATER_LED_STYLES:
+            settings[key] = style
+    return settings
+
+
+def _scaled_color(color: str, brightness: int, intensity: float) -> str:
+    factor = max(0.0, min(1.0, brightness / 100.0)) * max(0.0, min(1.0, intensity))
+    channels = [int(color[offset : offset + 2], 16) for offset in (1, 3, 5)]
+    return "".join(f"{int(round(channel * factor)):02x}" for channel in channels)
+
+
+def animation_text(style: str, color: str, brightness: int) -> str:
+    """Create an S420 animation using only its visible center status light."""
+    patterns: dict[str, list[tuple[int, float]]] = {
+        "pulse": [(55, value) for value in (0.12, 0.28, 0.52, 0.78, 1.0, 0.78, 0.52, 0.28)],
+        "breathe": [(95, value) for value in (0.10, 0.20, 0.36, 0.58, 0.80, 1.0, 0.80, 0.58, 0.36, 0.20)],
+        "heartbeat": [(70, value) for value in (0.08, 1.0, 0.15, 0.08, 0.68, 0.12, 0.08, 0.08)],
+        "solid": [(250, 1.0)],
+    }
+    frames = patterns.get(style, patterns["pulse"])
+    lines = ["loop"]
+    for duration, intensity in frames:
+        visible = _scaled_color(color, brightness, intensity)
+        lines.append(f"{duration}:{','.join([visible] + ['000000'] * 11)}")
+    return "\n".join(lines) + "\n"
+
+
+def write_tater_animations(
+    settings: dict[str, Any],
+    directory: Path = TATER_ANIMATION_DIR,
+) -> None:
+    directory.mkdir(parents=True, exist_ok=True)
+    color = str(settings["led_color"])
+    brightness = int(settings["led_brightness"])
+    states = {
+        "listening": str(settings["led_listening_animation"]),
+        "thinking": str(settings["led_thinking_animation"]),
+        "replying": str(settings["led_replying_animation"]),
+    }
+    for state, style in states.items():
+        path = directory / f"tater-{state}.animation"
+        temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        temporary.write_text(animation_text(style, color, brightness), encoding="utf-8")
+        os.replace(temporary, path)
 
 
 def _atomic_sound_update(updates: dict[str, Any], path: Path = SOUND_CONFIG) -> None:
@@ -159,8 +242,23 @@ def apply_hardware_mute(muted: bool) -> None:
     _atomic_sound_update({"mic_mute": int(gpio_value)})
 
 
+def ensure_unity_sink_volume() -> None:
+    """Keep PulseAudio neutral; Tater's player owns the one user volume stage."""
+    try:
+        subprocess.run(
+            ["pactl", "set-sink-volume", "@DEFAULT_SINK@", "100%"],
+            check=False,
+            timeout=2,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.SubprocessError):
+        _LOGGER.exception("Unable to set the PulseAudio sink to unity volume")
+
+
 def show_animation(filename: str, to_idle: bool = False) -> None:
-    animation = ANIMATION_DIR / filename
+    tater_animation = TATER_ANIMATION_DIR / filename
+    animation = tater_animation if tater_animation.exists() else ANIMATION_DIR / filename
     command = [
         "dbus-send",
         "--system",
@@ -186,6 +284,8 @@ class ThirdRealityBridge:
         self.pipeline_active = False
         self.last_volume: Optional[float] = None
         self.last_muted: Optional[bool] = None
+        self.last_led_settings: Optional[dict[str, Any]] = None
+        self.current_led_event = "idle"
 
     async def send_command(self, command: str, data: Optional[dict[str, Any]] = None) -> None:
         websocket = self.websocket
@@ -201,15 +301,19 @@ class ThirdRealityBridge:
                 _LOGGER.debug("Peripheral command failed during reconnect: %s", command)
 
     async def register_hardware(self) -> None:
+        await asyncio.to_thread(ensure_unity_sink_volume)
+        led_settings = await asyncio.to_thread(read_led_settings)
+        await asyncio.to_thread(write_tater_animations, led_settings)
+        self.last_led_settings = led_settings
         await self.send_command("register_button")
         await self.send_command(
             "register_light",
             {
-                "name": "ThirdReality LED Ring",
-                "object_id": "thirdreality_led_ring",
-                "effects": ["Listening", "Thinking", "Speaking", "Alert", "Error", "Muted"],
-                "supports_rgb": False,
-                "supports_brightness": False,
+                "name": "Tater S420 Status Light",
+                "object_id": "tater_s420_status_light",
+                "effects": ["Tater Pulse", "Tater Breathe", "Tater Heartbeat", "Steady Tater Glow"],
+                "supports_rgb": True,
+                "supports_brightness": True,
             },
         )
         volume, muted = read_sound_config()
@@ -249,8 +353,10 @@ class ThirdRealityBridge:
 
         if event in PIPELINE_ACTIVE_EVENTS:
             self.pipeline_active = True
+            self.current_led_event = event
         elif event in PIPELINE_IDLE_EVENTS:
             self.pipeline_active = False
+            self.current_led_event = event
 
         animation = event_animation(event, payload)
         if animation is not None:
@@ -265,6 +371,13 @@ class ThirdRealityBridge:
             if self.last_muted is None or muted != self.last_muted:
                 self.last_muted = muted
                 await self.send_command("mute_mic" if muted else "unmute_mic")
+            led_settings = await asyncio.to_thread(read_led_settings)
+            if led_settings != self.last_led_settings:
+                self.last_led_settings = led_settings
+                await asyncio.to_thread(write_tater_animations, led_settings)
+                animation = event_animation(self.current_led_event)
+                if animation is not None:
+                    await asyncio.to_thread(show_animation, animation[0], animation[1])
             await asyncio.sleep(0.25)
 
     async def dispatch_button(self, clicks: int, long_press: bool = False) -> None:

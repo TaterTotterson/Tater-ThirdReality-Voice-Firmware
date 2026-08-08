@@ -13,7 +13,7 @@ use `--update` to advance the pin and then rerun CI and hardware tests.
 | ThirdReality LEDs | Ready | Local peripheral bridge to the D-Bus LED service |
 | Hardware volume and microphone mute | Ready | Bidirectional `/data/conf/sound.json` synchronization |
 | Home button press-to-talk | Ready | Single press starts or stops the active pipeline |
-| Tater-native media playback | Ready | Single-device music sessions and ducked TTS overlays from the authenticated Tater server |
+| Tater-native media playback | Ready | Single-device music, looping sessions, and ducked TTS overlays from the authenticated Tater server |
 | Signed SWUpdate artifacts | Ready | Build-time external signing key and embedded public key |
 | Native Tater timer control | Ready | Up to eight local timers; start, list, cancel, snooze, alarm, and stop-word ringing control |
 | Native Tater OTA command | Ready | Authenticated URL command, local download, mandatory SWUpdate signature verification, and reboot |
@@ -21,10 +21,13 @@ use `--update` to advance the pin and then rerun CI and hardware tests.
 | Tater setup/reset command | Ready | Clears Wi-Fi and pairing, then reboots into `Tater-Setup-XXXX` |
 | Production-owned secure boot | Pending | SWUpdate is rekeyed; proprietary Amlogic boot-FIP trust is not |
 | Barge-in while TTS is playing | Not advertised | Client reports `barge_in: false` |
-| Synchronized stereo and drift correction | Not advertised | The S420 Linux/mpv path does not guarantee sample-accurate scheduling |
-| Audio scenes and looping backgrounds | Not advertised | Basic music plus TTS overlays are supported; the full ESP scene mixer is not |
+| Synchronized stereo and multi-room | Software ready; hardware calibration pending | Audio-session v2 preload/commit, left/right/mono routing, 48 kHz playhead telemetry, and mpv rate-slew drift correction |
+| Audio scenes and looping backgrounds | Partial | Looping media sessions are supported; the full ESP scene mixer is not advertised |
 | Physical-device regression pass | Pending | Requires a ThirdReality S420 unit and audio fixtures |
 
 Capabilities stay disabled in the native hello until their complete path is
-implemented and tested. The S420 intentionally does not claim the ESP
-satellite's synchronized stereo, drift correction, scene mixer, or barge-in.
+implemented and tested. The S420 now advertises the Tater audio-session v2
+stereo and multi-room primitives, but intentionally does not claim the ESP
+satellite's full scene mixer, synchronized TTS overlays, underrun recovery, or
+barge-in. Physical speaker-to-speaker calibration remains required before a
+release can be described as sample-aligned on S420 hardware.

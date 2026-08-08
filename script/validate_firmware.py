@@ -30,6 +30,10 @@ TATER_NO_FRAME_SENDER_PATCH = (
     ROOT
     / "buildroot/package/thirdreality/tater-linux-satellite/0005-remove-legacy-frame-sender.patch"
 )
+TATER_SYNC_PLAYER_PATCH = (
+    ROOT
+    / "buildroot/package/thirdreality/tater-linux-satellite/0006-add-tater-synchronized-mpv-controls.patch"
+)
 TATER_FEATURES = (
     ROOT
     / "buildroot/package/thirdreality/tater-linux-satellite/files/tater_features.py"
@@ -103,6 +107,7 @@ def main() -> int:
     tater_metadata_patch = TATER_METADATA_PATCH.read_text(encoding="utf-8")
     tater_native_only_patch = TATER_NATIVE_ONLY_PATCH.read_text(encoding="utf-8")
     tater_no_frame_sender_patch = TATER_NO_FRAME_SENDER_PATCH.read_text(encoding="utf-8")
+    tater_sync_player_patch = TATER_SYNC_PLAYER_PATCH.read_text(encoding="utf-8")
     tater_features = TATER_FEATURES.read_text(encoding="utf-8")
     launcher = LAUNCHER.read_text(encoding="utf-8")
     hardware_bridge = HARDWARE_BRIDGE.read_text(encoding="utf-8")
@@ -214,10 +219,56 @@ def main() -> int:
     require('description = "Tater-native Linux voice satellite runtime"' in tater_metadata_patch, "legacy assistant metadata remains active", errors)
     for capability in ("live_settings", "timers", "ota", "setup_mode", "persistent_media_sessions", "tts_overlays"):
         require(f'"{capability}": True' in tater_features, f"Tater feature is missing: {capability}", errors)
-    for unsupported in ("synchronized_media_sessions", "stereo_channel_selection", "media_drift_correction"):
-        require(f'"{unsupported}": False' in tater_features, f"unsupported capability is not truthfully disabled: {unsupported}", errors)
-    require('"-k",' in tater_features and 'str(_SWUPDATE_KEY)' in tater_features, "OTA does not require the SWUpdate public key", errors)
-    require('"-i",' in tater_features and 'str(_OTA_PATH)' in tater_features, "OTA does not pass the downloaded image to SWUpdate", errors)
+    for capability in (
+        "synchronized_media_sessions",
+        "stereo_channel_selection",
+        "media_playhead_telemetry",
+        "media_drift_correction",
+        "media_rate_slew",
+    ):
+        require(
+            f'"{capability}": self._sync_player_available' in tater_features,
+            f"synchronized media capability is not guarded by the mpv runtime: {capability}",
+            errors,
+        )
+    require(
+        '"audio_session_version": 2 if self._sync_player_available else 1' in tater_features,
+        "Tater audio-session v2 is not advertised with the synchronized player",
+        errors,
+    )
+    for primitive in (
+        "prepare_synchronized",
+        "synchronized_snapshot",
+        "seek_synchronized",
+        "set_synchronized_speed",
+        "reset_synchronized",
+    ):
+        require(
+            primitive in tater_sync_player_patch,
+            f"synchronized mpv primitive is missing: {primitive}",
+            errors,
+        )
+    require(
+        '_OTA_PATH = Path("/data/software.swu")' in tater_features,
+        "OTA is not staged at the path consumed by S420 recovery",
+        errors,
+    )
+    require(
+        "expected_sha256=expected_sha256" in tater_features
+        and "expected_size=expected_size" in tater_features,
+        "OTA download is not bound to the release manifest hash and size",
+        errors,
+    )
+    require(
+        '"/usr/bin/swupdate",' in tater_features and '"-G",' in tater_features,
+        "OTA does not arm the vendor recovery installer",
+        errors,
+    )
+    require(
+        'str(_SWUPDATE_KEY)' not in tater_features and '"-i",' not in tater_features,
+        "runtime OTA incorrectly bypasses the vendor recovery install path",
+        errors,
+    )
     for applet in ("INETD", "TELNET", "TELNETD", "TFTP", "TFTPD"):
         require(
             f"# CONFIG_{applet} is not set" in busybox_fragment,

@@ -26,6 +26,8 @@ jobs:
 
       - name: Validate scripts
         run: |
+          python3 -m py_compile script/build_release_manifest.py
+          python3 script/build_release_manifest.py --help >/dev/null
           bash -n go
           bash -n script/prepare_ota_keys.sh
           bash -n script/generate_development_ota_key.sh

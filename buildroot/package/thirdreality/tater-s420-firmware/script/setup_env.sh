@@ -12,14 +12,13 @@ DEVICE_CONF="/data/conf/device.json"
 if [ ! -s "$SOUND_CONF" ] || ! jq empty "$SOUND_CONF" 2>/dev/null; then
     cat > "$SOUND_CONF" <<EOF
 {
-    "volume": 50,
+    "volume": 80,
     "mic_gain": 30,
     "mic_mute": 1
 }
 EOF
 fi
 
-VOL=$(jq -r '.volume // 50' "$SOUND_CONF")
 MIC_GAIN=$(jq -r '.mic_gain // 30' "$SOUND_CONF")
 MIC_MUTE=$(jq -r '.mic_mute // 1' "$SOUND_CONF")
 
@@ -62,8 +61,9 @@ fi
 # head -c 38400 /dev/zero | aplay -D softvol -t raw -f S32_LE -c2 -r48000 > /dev/null 2>&1
 # set mic gain
 amixer cset numid=7 "$MIC_GAIN"% > /dev/null 2>&1
-# set volume
-pactl set-sink-volume @DEFAULT_SINK@ "$VOL"% > /dev/null 2>&1
+# Keep PulseAudio at unity. Tater's player applies the saved/user volume once;
+# applying it here as well made the S420 much quieter and defeated its buttons.
+pactl set-sink-volume @DEFAULT_SINK@ 100% > /dev/null 2>&1
 # enable speaker
 if [ ! -d "/sys/class/gpio/gpio414" ]; then
     echo 414 > /sys/class/gpio/export

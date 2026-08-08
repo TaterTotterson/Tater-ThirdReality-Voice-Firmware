@@ -41,7 +41,7 @@ class BridgeHelpersTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             config = Path(temp_dir) / "sound.json"
             config.write_text('{"volume": "loud", "mic_mute": "false"}', encoding="utf-8")
-            self.assertEqual(bridge_module.read_sound_config(config), (0.5, True))
+            self.assertEqual(bridge_module.read_sound_config(config), (0.8, True))
 
     def test_coerce_bool(self) -> None:
         self.assertFalse(bridge_module.coerce_bool("false"))
@@ -51,7 +51,7 @@ class BridgeHelpersTest(unittest.TestCase):
     def test_event_animation(self) -> None:
         self.assertEqual(
             bridge_module.event_animation("thinking"),
-            ("active-thinking.animation", False),
+            ("tater-thinking.animation", False),
         )
         self.assertEqual(
             bridge_module.event_animation("muted", {"muted": True}),
@@ -78,6 +78,61 @@ class BridgeHelpersTest(unittest.TestCase):
                 {"volume": 25, "mic_gain": 30, "mic_mute": 0},
             )
 
+    def test_s420_led_settings_use_tater_defaults_and_supported_effects(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = Path(temp_dir) / "settings.json"
+            config.write_text(
+                json.dumps(
+                    {
+                        "led_brightness": 65,
+                        "led_color": "#FF5A1F",
+                        "led_listening_animation": "heartbeat",
+                        "led_thinking_animation": "directional",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            settings = bridge_module.read_led_settings(config)
+        self.assertEqual(settings["led_brightness"], 65)
+        self.assertEqual(settings["led_color"], "#ff5a1f")
+        self.assertEqual(settings["led_listening_animation"], "heartbeat")
+        self.assertEqual(settings["led_thinking_animation"], "breathe")
+
+    def test_animation_only_drives_the_visible_s420_status_light(self) -> None:
+        content = bridge_module.animation_text("pulse", "#ff5a1f", 80)
+        lines = content.strip().splitlines()
+        self.assertEqual(lines[0], "loop")
+        self.assertGreater(len(lines), 2)
+        for line in lines[1:]:
+            colors = line.split(":", 1)[1].split(",")
+            self.assertEqual(len(colors), 12)
+            self.assertNotEqual(colors[0], "000000")
+            self.assertEqual(colors[1:], ["000000"] * 11)
+
+    def test_write_tater_animations_creates_all_pipeline_states(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            directory = Path(temp_dir)
+            bridge_module.write_tater_animations(
+                dict(bridge_module.TATER_LED_DEFAULTS),
+                directory,
+            )
+            self.assertEqual(
+                {path.name for path in directory.iterdir()},
+                {
+                    "tater-listening.animation",
+                    "tater-thinking.animation",
+                    "tater-replying.animation",
+                },
+            )
+
+    def test_unity_sink_volume_is_applied_without_amplification(self) -> None:
+        with mock.patch.object(bridge_module.subprocess, "run") as run:
+            bridge_module.ensure_unity_sink_volume()
+        self.assertEqual(
+            run.call_args.args[0],
+            ["pactl", "set-sink-volume", "@DEFAULT_SINK@", "100%"],
+        )
+
 
 class BridgeButtonTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
@@ -99,6 +154,17 @@ class BridgeButtonTest(unittest.IsolatedAsyncioTestCase):
             [message["command"] for message in self.websocket.messages],
             ["button_single_press", "stop_pipeline"],
         )
+
+    async def test_hardware_registration_names_the_single_status_light(self) -> None:
+        with mock.patch.object(bridge_module, "ensure_unity_sink_volume"), mock.patch.object(
+            bridge_module, "read_led_settings", return_value=dict(bridge_module.TATER_LED_DEFAULTS)
+        ), mock.patch.object(bridge_module, "write_tater_animations"), mock.patch.object(
+            bridge_module, "read_sound_config", return_value=(0.8, False)
+        ):
+            await self.bridge.register_hardware()
+        light = next(message for message in self.websocket.messages if message["command"] == "register_light")
+        self.assertEqual(light["data"]["name"], "Tater S420 Status Light")
+        self.assertNotIn("Ring", light["data"]["name"])
 
 
 if __name__ == "__main__":
