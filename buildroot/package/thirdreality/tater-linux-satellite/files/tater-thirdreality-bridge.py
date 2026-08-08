@@ -34,6 +34,7 @@ EV_KEY = 1
 KEY_HOME = 102
 INPUT_EVENT = struct.Struct("llHHI")
 CLICK_WINDOW_SECONDS = 0.5
+MIN_PRESS_SECONDS = 0.03
 LONG_PRESS_SECONDS = 1.5
 
 EVENT_ANIMATIONS: dict[str, tuple[str, bool]] = {
@@ -90,6 +91,19 @@ def coerce_bool(value: Any, default: bool = False) -> bool:
         if normalized in {"0", "false", "no", "off", ""}:
             return False
     return default
+
+
+def completed_press_duration(
+    pressed_at: Optional[float],
+    released_at: float,
+) -> Optional[float]:
+    """Return a valid press duration, ignoring orphan releases and GPIO bounce."""
+    if pressed_at is None:
+        return None
+    duration = max(0.0, released_at - pressed_at)
+    if duration < MIN_PRESS_SECONDS:
+        return None
+    return duration
 
 
 def read_sound_config(path: Path = SOUND_CONFIG) -> tuple[float, bool]:
@@ -382,9 +396,14 @@ class ThirdRealityBridge:
 
     async def dispatch_button(self, clicks: int, long_press: bool = False) -> None:
         if long_press:
+            _LOGGER.info("Home button long press")
             await self.send_command("button_long_press")
             return
-        if clicks <= 1:
+        if clicks <= 0:
+            _LOGGER.debug("Ignoring home button dispatch without a completed click")
+            return
+        _LOGGER.info("Home button press clicks=%s pipeline_active=%s", clicks, self.pipeline_active)
+        if clicks == 1:
             await self.send_command("button_single_press")
             await self.send_command("stop_pipeline" if self.pipeline_active else "start_listening")
         elif clicks == 2:
@@ -426,11 +445,15 @@ class ThirdRealityBridge:
                         if event_type != EV_KEY or code != KEY_HOME:
                             continue
                         if value == 1:
-                            pressed_at = time.monotonic()
+                            if pressed_at is None:
+                                pressed_at = time.monotonic()
                         elif value == 0:
                             released_at = time.monotonic()
-                            duration = released_at - pressed_at if pressed_at is not None else 0.0
+                            duration = completed_press_duration(pressed_at, released_at)
                             pressed_at = None
+                            if duration is None:
+                                _LOGGER.debug("Ignoring unmatched or bounced home button release")
+                                continue
                             if duration >= LONG_PRESS_SECONDS:
                                 click_count = 0
                                 last_release = None

@@ -155,6 +155,22 @@ class BridgeButtonTest(unittest.IsolatedAsyncioTestCase):
             ["button_single_press", "stop_pipeline"],
         )
 
+    async def test_zero_click_dispatch_does_not_open_microphone(self) -> None:
+        await self.bridge.dispatch_button(0)
+        self.assertEqual(self.websocket.messages, [])
+
+    def test_orphan_release_is_not_a_completed_press(self) -> None:
+        self.assertIsNone(bridge_module.completed_press_duration(None, 10.0))
+
+    def test_gpio_bounce_is_not_a_completed_press(self) -> None:
+        self.assertIsNone(bridge_module.completed_press_duration(10.0, 10.01))
+
+    def test_normal_press_returns_duration(self) -> None:
+        self.assertAlmostEqual(
+            bridge_module.completed_press_duration(10.0, 10.25),
+            0.25,
+        )
+
     async def test_hardware_registration_names_the_single_status_light(self) -> None:
         with mock.patch.object(bridge_module, "ensure_unity_sink_volume"), mock.patch.object(
             bridge_module, "read_led_settings", return_value=dict(bridge_module.TATER_LED_DEFAULTS)
