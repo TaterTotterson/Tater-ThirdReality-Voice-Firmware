@@ -223,6 +223,7 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.manager.capabilities["media_drift_correction"])
         self.assertTrue(self.manager.capabilities["media_rate_slew"])
         self.assertTrue(self.manager.capabilities["media_render_clock"])
+        self.assertEqual(self.manager.capabilities["media_output_latency_frames"], 6144)
         self.assertEqual(self.manager.capabilities["audio_session_version"], 2)
 
     async def test_timer_start_list_and_cancel_round_trip(self) -> None:
@@ -516,6 +517,7 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(prepared["ok"])
             self.assertEqual(prepared["reply_to"], "prepare-request")
             self.assertEqual(prepared["sample_rate_hz"], 48000)
+            self.assertEqual(prepared["output_latency_frames"], 6144)
             self.assertEqual(
                 self.client.state.music_player.prepared[-1],
                 ("https://tater.test/music.flac", "left", False),
@@ -549,6 +551,7 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
             self.assertGreaterEqual(self.client.state.music_player.resume_count, 1)
             playhead = self._messages("media.session.playhead")[-1]["payload"]
             self.assertIn("rendered_frames", playhead)
+            self.assertIn("output_latency_frames", playhead)
             self.assertEqual(playhead["output_frames"], playhead["rendered_frames"])
             self.assertEqual(playhead["playback_rate"], 1.0)
         finally:

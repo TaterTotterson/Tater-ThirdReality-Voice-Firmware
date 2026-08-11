@@ -37,6 +37,10 @@ _MEDIA_SAMPLE_RATE_HZ = 48000
 _MEDIA_PREPARE_TIMEOUT_SECONDS = 60.0
 _MEDIA_COMMIT_TIMEOUT_SECONDS = 30.0
 _MEDIA_PLAYHEAD_INTERVAL_SECONDS = 1.0
+_MEDIA_DEFAULT_OUTPUT_LATENCY_FRAMES = 6144
+_MEDIA_MAX_OUTPUT_LATENCY_FRAMES = 24000
+_MEDIA_LATENCY_EMA_ALPHA = 0.25
+_MEDIA_LATENCY_LEARN_SAMPLES = 3
 _MEDIA_CHANNELS = {"stereo", "left", "right", "mono"}
 _LED_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
 _LED_ANIMATIONS = {"pulse", "breathe", "heartbeat", "solid"}
@@ -273,7 +277,10 @@ class _MediaSession:
     committed: bool = False
     started: bool = False
     scheduled_start_us: int = 0
+    audible_start_us: int = 0
     actual_start_us: int = 0
+    output_latency_frames: int = _MEDIA_DEFAULT_OUTPUT_LATENCY_FRAMES
+    latency_learning_samples: int = 0
     correction_frames_since_report: int = 0
     underrun_events: int = 0
     was_rebuffering: bool = False
@@ -334,6 +341,9 @@ class TaterFeatureManager:
             "media_drift_correction": self._sync_player_available,
             "media_rate_slew": self._sync_player_available,
             "media_render_clock": self._sync_player_available,
+            "media_output_latency_frames": (
+                _MEDIA_DEFAULT_OUTPUT_LATENCY_FRAMES if self._sync_player_available else 0
+            ),
             "media_underrun_recovery": False,
             "media_session_start_position": self._sync_player_available,
             "synchronized_tts_overlays": False,
@@ -851,6 +861,7 @@ class TaterFeatureManager:
                     "channel": session.channel,
                     "buffered_frames": buffered_frames,
                     "sample_rate_hz": _MEDIA_SAMPLE_RATE_HZ,
+                    "output_latency_frames": session.output_latency_frames,
                     "satellite_time_us": time.monotonic_ns() // 1000,
                 }
                 if session.prepare_requested:
@@ -901,6 +912,16 @@ class TaterFeatureManager:
         start_at_us = _integer(payload.get("start_at_us"), maximum=2**63 - 1)
         if start_at_us <= 0:
             start_at_us = time.monotonic_ns() // 1000
+        session.audible_start_us = _integer(
+            payload.get("audible_start_at_us"),
+            start_at_us,
+            maximum=2**63 - 1,
+        )
+        session.output_latency_frames = _integer(
+            payload.get("output_latency_frames"),
+            session.output_latency_frames,
+            maximum=_MEDIA_MAX_OUTPUT_LATENCY_FRAMES,
+        )
         self._schedule_media_start(session, start_at_us)
         self._send(
             "media.session.commit.result",
@@ -910,6 +931,8 @@ class TaterFeatureManager:
                 "session_id": session.session_id,
                 "group_id": session.group_id,
                 "start_at_us": start_at_us,
+                "audible_start_at_us": session.audible_start_us,
+                "output_latency_frames": session.output_latency_frames,
             },
         )
 
@@ -979,6 +1002,31 @@ class TaterFeatureManager:
                     max(0.0, float(snapshot.get("rendered_position_seconds") or snapshot.get("position_seconds") or 0.0))
                     * _MEDIA_SAMPLE_RATE_HZ
                 )
+                if session.latency_learning_samples < _MEDIA_LATENCY_LEARN_SAMPLES:
+                    elapsed_frames = int(
+                        round(
+                            max(0, now_us - session.actual_start_us)
+                            * _MEDIA_SAMPLE_RATE_HZ
+                            / 1_000_000.0
+                        )
+                    )
+                    start_position_frames = int(
+                        round(session.start_position_ms * _MEDIA_SAMPLE_RATE_HZ / 1000.0)
+                    )
+                    rendered_elapsed_frames = max(0, rendered_frames - start_position_frames)
+                    observed_latency_frames = elapsed_frames - rendered_elapsed_frames
+                    if 0 < observed_latency_frames <= _MEDIA_MAX_OUTPUT_LATENCY_FRAMES:
+                        session.output_latency_frames = (
+                            observed_latency_frames
+                            if session.latency_learning_samples <= 0
+                            else int(
+                                round(
+                                    ((1.0 - _MEDIA_LATENCY_EMA_ALPHA) * session.output_latency_frames)
+                                    + (_MEDIA_LATENCY_EMA_ALPHA * observed_latency_frames)
+                                )
+                            )
+                        )
+                        session.latency_learning_samples += 1
                 self._send(
                     "media.session.playhead",
                     {
@@ -993,6 +1041,8 @@ class TaterFeatureManager:
                         "buffered_frames": int(max(0.0, float(snapshot.get("buffered_seconds") or 0.0)) * _MEDIA_SAMPLE_RATE_HZ),
                         "satellite_time_us": now_us,
                         "scheduled_start_us": session.scheduled_start_us,
+                        "audible_start_us": session.audible_start_us,
+                        "output_latency_frames": session.output_latency_frames,
                         "correction_frames": correction_frames,
                         "rebuffering": rebuffering,
                         "underrun_events": session.underrun_events,

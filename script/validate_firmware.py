@@ -275,6 +275,12 @@ def main() -> int:
         "Tater audio-session v2 is not advertised with the synchronized player",
         errors,
     )
+    require(
+        '"media_output_latency_frames"' in tater_features
+        and "_MEDIA_DEFAULT_OUTPUT_LATENCY_FRAMES" in tater_features,
+        "S420 synchronized playback does not advertise its output render lead",
+        errors,
+    )
     for primitive in (
         "prepare_synchronized",
         "synchronized_snapshot",
