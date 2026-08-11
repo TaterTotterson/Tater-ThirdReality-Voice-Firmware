@@ -61,7 +61,7 @@ For a disposable development build:
 ```sh
 ./script/generate_development_ota_key.sh
 TATER_SWUPDATE_PRIVATE_KEY_FILE=.secrets/swupdate-development-private.pem \
-  ./go --docker trspk 0.2.3
+  ./go --docker trspk 0.2.4
 ```
 
 Artifacts are written to `image/` as an Amlogic USB-burn image and a signed

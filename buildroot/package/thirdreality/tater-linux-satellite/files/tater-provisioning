@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-WPA_CONFIG=/etc/wpa_supplicant.conf
+WPA_CONFIG=/data/conf/wpa_supplicant.conf
 TATER_CONFIG=/data/conf/tater.json
 DEFAULT_TATER_CONFIG=/usr/share/tater/defaults/tater.json
 TOKEN_FILE=/data/conf/tater-device-token

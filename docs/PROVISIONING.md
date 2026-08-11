@@ -60,7 +60,8 @@ The paired device token is stored at `/data/conf/tater-device-token` with mode
 `/data/conf/tater-preferences.json`, and live Tater settings are persisted in
 `/data/conf/tater-live-settings.json`. After a successful pairing, the one-time
 pairing code is erased from the settings on the next service start. The Wi-Fi
-station profile is stored in `/etc/wpa_supplicant.conf` with mode 0600.
+station profile is stored in `/data/conf/wpa_supplicant.conf` with mode 0600;
+`/etc/wpa_supplicant.conf` is linked to that persistent copy during boot.
 
 The production image has no network SSH or ADB service. The hotspot is a local
 setup surface only; it is not available once provisioning is complete.

@@ -50,6 +50,16 @@ PROVISIONING_SERVER = (
     ROOT
     / "buildroot/package/thirdreality/tater-linux-satellite/files/tater-provisioning-server.py"
 )
+NETWORK_PERSISTENCE = (
+    ROOT
+    / "buildroot/package/thirdreality/tater-linux-satellite/files/S38tater-network-persistence"
+)
+NAND_OTA_DESCRIPTION = (
+    ROOT / "buildroot/board/thirdreality/common/ota/ota-axg/sw-description-nand"
+)
+NAND_OTA_FILELIST = (
+    ROOT / "buildroot/board/thirdreality/common/ota/ota-axg/ota-package-filelist-nand"
+)
 SUPERVISOR = ROOT / "buildroot/package/thirdreality/tater-s420-firmware/script/S99tater-satellite"
 WIFI_INIT = ROOT / "buildroot/board/thirdreality/common/rootfs/etc/init.d/S39wifi"
 KERNEL_FRAGMENT = ROOT / "buildroot/board/thirdreality/trspk/linux-no-bluetooth.fragment"
@@ -113,6 +123,9 @@ def main() -> int:
     hardware_bridge = HARDWARE_BRIDGE.read_text(encoding="utf-8")
     provisioning = PROVISIONING.read_text(encoding="utf-8")
     provisioning_server = PROVISIONING_SERVER.read_text(encoding="utf-8")
+    network_persistence = NETWORK_PERSISTENCE.read_text(encoding="utf-8")
+    nand_ota_description = NAND_OTA_DESCRIPTION.read_text(encoding="utf-8")
+    nand_ota_filelist = NAND_OTA_FILELIST.read_text(encoding="utf-8")
     supervisor = SUPERVISOR.read_text(encoding="utf-8")
     wifi_init = WIFI_INIT.read_text(encoding="utf-8")
     kernel_fragment = KERNEL_FRAGMENT.read_text(encoding="utf-8")
@@ -187,6 +200,18 @@ def main() -> int:
     require("S44bluetooth" not in active_runtime, "active runtime still calls Bluetooth setup", errors)
     require("/etc/bluetooth" not in broadcom_mk, "Broadcom package still installs Bluetooth firmware", errors)
     require("tater-provisioning" in package_mk, "Tater provisioning tools are not installed", errors)
+    require(
+        "S38tater-network-persistence" in package_mk,
+        "persistent Wi-Fi migration is not installed before station startup",
+        errors,
+    )
+    require(
+        "/data/conf/wpa_supplicant.conf" in provisioning
+        and "/data/conf/wpa_supplicant.conf" in provisioning_server
+        and "/data/conf/wpa_supplicant.conf" in network_persistence,
+        "Wi-Fi provisioning is not stored on the persistent data partition",
+        errors,
+    )
     require('ssid="Tater-Setup-$suffix"' in provisioning, "Tater setup SSID is missing", errors)
     require("192.168.4.1" in provisioning, "Tater setup address is missing", errors)
     require("--address=/#/192.168.4.1" in provisioning, "captive DNS is missing", errors)
@@ -197,6 +222,19 @@ def main() -> int:
         require(f'name="{field}"' in provisioning_server, f"setup field is missing: {field}", errors)
     require("<script src=" not in provisioning_server, "setup page loads a remote script", errors)
     require("<link " not in provisioning_server, "setup page loads a remote resource", errors)
+    require(
+        "rootfs.ubifs" in nand_ota_description
+        and "boot.img" in nand_ota_description
+        and "dtb.img" in nand_ota_description,
+        "routine NAND OTA is missing a system image",
+        errors,
+    )
+    for forbidden in ("u-boot.bin", "uboot:", "upgrade_step", "partition_migration"):
+        require(
+            forbidden not in nand_ota_description and forbidden not in nand_ota_filelist,
+            f"routine NAND OTA can reset persistent state through {forbidden}",
+            errors,
+        )
     require('LVAEvent.CONNECTION' in zeroconf_removal_patch, "Tater connection event is not patched", errors)
     require('-from .zeroconf import HomeAssistantZeroconf' in zeroconf_removal_patch, "Zeroconf removal patch is incomplete", errors)
     require("--tater-url is required" in tater_feature_patch, "Linux voice runtime can still enter ESPHome server mode", errors)

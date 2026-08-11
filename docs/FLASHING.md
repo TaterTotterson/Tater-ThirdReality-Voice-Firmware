@@ -13,6 +13,10 @@ artifacts. Tater verifies those fields before presenting or sending a file.
 The S420 verifies the OTA download again, and recovery verifies its SWUpdate
 signature before NAND is written.
 
+The routine OTA contains only the system root, kernel/boot image, and device
+tree. It does not write the data partition, bootloader, or U-Boot environment;
+those remain factory/recovery-only so an update cannot trigger a setup reset.
+
 ## First install
 
 The full image is not an ESP image and must never be passed to `esptool`.

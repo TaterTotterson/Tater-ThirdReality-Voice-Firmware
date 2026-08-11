@@ -16,7 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs
 
 
-WPA_CONFIG = Path(os.environ.get("TATER_WPA_CONFIG", "/etc/wpa_supplicant.conf"))
+WPA_CONFIG = Path(os.environ.get("TATER_WPA_CONFIG", "/data/conf/wpa_supplicant.conf"))
 TATER_CONFIG = Path(os.environ.get("TATER_CONFIG", "/data/conf/tater.json"))
 DEFAULT_TATER_CONFIG = Path(
     os.environ.get("TATER_DEFAULT_CONFIG", "/usr/share/tater/defaults/tater.json")

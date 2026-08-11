@@ -1,0 +1,42 @@
+#!/bin/sh
+set -eu
+
+PERSISTENT_WPA_CONFIG=${TATER_PERSISTENT_WPA_CONFIG:-/data/conf/wpa_supplicant.conf}
+SYSTEM_WPA_CONFIG=${TATER_SYSTEM_WPA_CONFIG:-/etc/wpa_supplicant.conf}
+
+persist_wifi_config() {
+    mkdir -p "$(dirname "$PERSISTENT_WPA_CONFIG")"
+
+    if [ ! -s "$PERSISTENT_WPA_CONFIG" ]; then
+        temporary="${PERSISTENT_WPA_CONFIG}.tmp.$$"
+        if [ -s "$SYSTEM_WPA_CONFIG" ]; then
+            cat "$SYSTEM_WPA_CONFIG" > "$temporary"
+        else
+            cat > "$temporary" <<'EOF'
+ctrl_interface=/var/run/wpa_supplicant
+ap_scan=1
+update_config=1
+EOF
+        fi
+        chmod 600 "$temporary"
+        mv "$temporary" "$PERSISTENT_WPA_CONFIG"
+    fi
+
+    chmod 600 "$PERSISTENT_WPA_CONFIG"
+    if [ "$SYSTEM_WPA_CONFIG" != "$PERSISTENT_WPA_CONFIG" ]; then
+        rm -f "$SYSTEM_WPA_CONFIG"
+        ln -s "$PERSISTENT_WPA_CONFIG" "$SYSTEM_WPA_CONFIG"
+    fi
+}
+
+case "${1:-start}" in
+    start|restart)
+        persist_wifi_config
+        ;;
+    stop)
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}" >&2
+        exit 2
+        ;;
+esac

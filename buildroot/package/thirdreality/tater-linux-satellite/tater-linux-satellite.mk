@@ -66,6 +66,8 @@ define TATER_LINUX_SATELLITE_INSTALL_RESOURCES
 		$(TARGET_DIR)/usr/bin/tater-provisioning
 	$(INSTALL) -D -m 0755 $(TATER_LINUX_SATELLITE_PKGDIR)/files/tater-provisioning-server.py \
 		$(TARGET_DIR)/usr/bin/tater-provisioning-server
+	$(INSTALL) -D -m 0755 $(TATER_LINUX_SATELLITE_PKGDIR)/files/S38tater-network-persistence \
+		$(TARGET_DIR)/etc/init.d/S38tater-network-persistence
 	$(INSTALL) -D -m 0600 $(TATER_LINUX_SATELLITE_PKGDIR)/files/tater.json \
 		$(TARGET_DIR)/usr/share/tater/defaults/tater.json
 endef
