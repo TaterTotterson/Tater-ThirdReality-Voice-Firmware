@@ -8,8 +8,8 @@ v2 implementation.  The device-specific session coordinator remains in the
 S420 firmware overlay while the generic player owns mpv access and locking.
 ---
  linux_voice_assistant/mpv_player.py    | 43 ++++++++++++++++
- linux_voice_assistant/player/libmpv.py | 77 ++++++++++++++++++++++++++++-
- 2 files changed, 119 insertions(+), 1 deletion(-)
+ linux_voice_assistant/player/libmpv.py | 83 ++++++++++++++++++++++++++++-
+ 2 files changed, 125 insertions(+), 1 deletion(-)
 
 diff --git a/linux_voice_assistant/mpv_player.py b/linux_voice_assistant/mpv_player.py
 index e821776..4647ba7 100644
@@ -90,7 +90,7 @@ index 82e38a6..51aa980 100644
  
  
  class LibMpvPlayer(AudioPlayer):
-@@ -83,6 +91,74 @@ class LibMpvPlayer(AudioPlayer):
+@@ -83,6 +91,80 @@ class LibMpvPlayer(AudioPlayer):
          self._mpv.pause = stop_first
          self._mpv.play(url)
  
@@ -113,6 +113,7 @@ index 82e38a6..51aa980 100644
 +            self._set_state(PlayerState.LOADING)
 +        self._mpv.pause = True
 +        self._mpv.speed = 1.0
++        self._mpv.audio_pitch_correction = False
 +        self._mpv.loop_file = "inf" if loop else "no"
 +        self._mpv.command("af", "set", audio_filter)
 +        self._mpv.play(url)
@@ -127,11 +128,15 @@ index 82e38a6..51aa980 100644
 +    def synchronized_snapshot(self) -> Dict[str, Any]:
 +        """Read timeline and cache properties as one thread-safe snapshot."""
 +        with self._state_lock:
-+            position = self._mpv_property("time_pos")
++            timeline_position = self._mpv_property("time_pos")
++            rendered_position = self._mpv_property("audio_pts")
++            position = rendered_position if rendered_position is not None else timeline_position
 +            cache_duration = self._mpv_property("demuxer_cache_duration", 0.0)
 +            return {
 +                "loaded": position is not None,
 +                "position_seconds": max(0.0, float(position or 0.0)),
++                "timeline_position_seconds": max(0.0, float(timeline_position or 0.0)),
++                "rendered_position_seconds": max(0.0, float(position or 0.0)),
 +                "buffered_seconds": max(0.0, float(cache_duration or 0.0)),
 +                "seeking": bool(self._mpv_property("seeking", False)),
 +                "rebuffering": bool(
@@ -153,12 +158,13 @@ index 82e38a6..51aa980 100644
 +    def set_synchronized_speed(self, speed: float) -> None:
 +        """Set a narrowly clamped rate for transparent clock correction."""
 +        with self._state_lock:
-+            self._mpv.speed = max(0.98, min(1.02, float(speed)))
++            self._mpv.speed = max(0.995, min(1.005, float(speed)))
 +
 +    def reset_synchronized(self) -> None:
 +        """Restore defaults so ordinary local playback is unaffected."""
 +        with self._state_lock:
 +            self._mpv.speed = 1.0
++            self._mpv.audio_pitch_correction = True
 +            self._mpv.loop_file = "no"
 +            self._mpv.command("af", "set", "")
 +

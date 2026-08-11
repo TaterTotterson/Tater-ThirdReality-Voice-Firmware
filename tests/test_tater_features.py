@@ -222,6 +222,7 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.manager.capabilities["media_playhead_telemetry"])
         self.assertTrue(self.manager.capabilities["media_drift_correction"])
         self.assertTrue(self.manager.capabilities["media_rate_slew"])
+        self.assertTrue(self.manager.capabilities["media_render_clock"])
         self.assertEqual(self.manager.capabilities["audio_session_version"], 2)
 
     async def test_timer_start_list_and_cancel_round_trip(self) -> None:
@@ -546,7 +547,10 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(started["channel"], "left")
             self.assertEqual(started["scheduled_start_us"], start_at_us)
             self.assertGreaterEqual(self.client.state.music_player.resume_count, 1)
-            self.assertTrue(self._messages("media.session.playhead"))
+            playhead = self._messages("media.session.playhead")[-1]["payload"]
+            self.assertIn("rendered_frames", playhead)
+            self.assertEqual(playhead["output_frames"], playhead["rendered_frames"])
+            self.assertEqual(playhead["playback_rate"], 1.0)
         finally:
             tater_features._MEDIA_PLAYHEAD_INTERVAL_SECONDS = original_interval
 

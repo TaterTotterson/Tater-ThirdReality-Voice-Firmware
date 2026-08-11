@@ -333,6 +333,7 @@ class TaterFeatureManager:
             "media_playhead_telemetry": self._sync_player_available,
             "media_drift_correction": self._sync_player_available,
             "media_rate_slew": self._sync_player_available,
+            "media_render_clock": self._sync_player_available,
             "media_underrun_recovery": False,
             "media_session_start_position": self._sync_player_available,
             "synchronized_tts_overlays": False,
@@ -970,6 +971,14 @@ class TaterFeatureManager:
                 session.was_rebuffering = rebuffering
                 correction_frames = session.correction_frames_since_report
                 session.correction_frames_since_report = 0
+                source_frames = int(
+                    max(0.0, float(snapshot.get("timeline_position_seconds") or snapshot.get("position_seconds") or 0.0))
+                    * _MEDIA_SAMPLE_RATE_HZ
+                )
+                rendered_frames = int(
+                    max(0.0, float(snapshot.get("rendered_position_seconds") or snapshot.get("position_seconds") or 0.0))
+                    * _MEDIA_SAMPLE_RATE_HZ
+                )
                 self._send(
                     "media.session.playhead",
                     {
@@ -977,8 +986,10 @@ class TaterFeatureManager:
                         "group_id": session.group_id,
                         "channel": session.channel,
                         "sample_rate_hz": _MEDIA_SAMPLE_RATE_HZ,
-                        "source_frames": int(max(0.0, float(snapshot.get("position_seconds") or 0.0)) * _MEDIA_SAMPLE_RATE_HZ),
-                        "output_frames": int(max(0, now_us - session.actual_start_us) * _MEDIA_SAMPLE_RATE_HZ / 1_000_000),
+                        "source_frames": source_frames,
+                        "rendered_frames": rendered_frames,
+                        "output_frames": rendered_frames,
+                        "playback_rate": max(0.995, min(1.005, float(snapshot.get("speed") or 1.0))),
                         "buffered_frames": int(max(0.0, float(snapshot.get("buffered_seconds") or 0.0)) * _MEDIA_SAMPLE_RATE_HZ),
                         "satellite_time_us": now_us,
                         "scheduled_start_us": session.scheduled_start_us,

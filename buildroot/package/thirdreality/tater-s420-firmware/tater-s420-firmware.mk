@@ -4,7 +4,7 @@
 #
 ################################################################################
 
-TATER_S420_FIRMWARE_VERSION = 0.2.1
+TATER_S420_FIRMWARE_VERSION = 0.2.2
 TATER_S420_FIRMWARE_SITE = $(TOPDIR)/package/thirdreality/tater-s420-firmware
 TATER_S420_FIRMWARE_SITE_METHOD = local
 

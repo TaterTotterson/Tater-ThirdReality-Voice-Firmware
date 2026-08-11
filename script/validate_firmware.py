@@ -225,6 +225,7 @@ def main() -> int:
         "media_playhead_telemetry",
         "media_drift_correction",
         "media_rate_slew",
+        "media_render_clock",
     ):
         require(
             f'"{capability}": self._sync_player_available' in tater_features,
@@ -248,6 +249,16 @@ def main() -> int:
             f"synchronized mpv primitive is missing: {primitive}",
             errors,
         )
+    require(
+        'self._mpv_property("audio_pts")' in tater_sync_player_patch,
+        "synchronized mpv telemetry does not use the rendered-audio clock",
+        errors,
+    )
+    require(
+        "self._mpv.audio_pitch_correction = False" in tater_sync_player_patch,
+        "synchronized mpv rate correction can still insert the audible pitch filter",
+        errors,
+    )
     require(
         '_OTA_PATH = Path("/data/software.swu")' in tater_features,
         "OTA is not staged at the path consumed by S420 recovery",
