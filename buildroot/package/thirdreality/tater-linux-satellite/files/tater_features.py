@@ -1157,13 +1157,15 @@ class TaterFeatureManager:
                 "ota.status",
                 {
                     "status": "rebooting",
-                    "progress": 100,
+                    "progress": 92,
                     "message": f"Verified signed firmware ({digest[:12]}); rebooting into the recovery installer.",
                 },
             )
             process = await asyncio.create_subprocess_exec(
                 "/usr/bin/swupdate",
                 "-G",
+                "-k",
+                str(_SWUPDATE_KEY),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
             )

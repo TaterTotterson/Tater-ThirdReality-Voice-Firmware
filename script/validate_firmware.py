@@ -271,12 +271,15 @@ def main() -> int:
         errors,
     )
     require(
-        '"/usr/bin/swupdate",' in tater_features and '"-G",' in tater_features,
-        "OTA does not arm the vendor recovery installer",
+        '"/usr/bin/swupdate",' in tater_features
+        and '"-G",' in tater_features
+        and '"-k",' in tater_features
+        and "str(_SWUPDATE_KEY)" in tater_features,
+        "OTA does not arm the signed vendor recovery installer",
         errors,
     )
     require(
-        'str(_SWUPDATE_KEY)' not in tater_features and '"-i",' not in tater_features,
+        '"-i",' not in tater_features,
         "runtime OTA incorrectly bypasses the vendor recovery install path",
         errors,
     )

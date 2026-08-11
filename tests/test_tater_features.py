@@ -708,6 +708,8 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
         swupdate.assert_awaited_once_with(
             "/usr/bin/swupdate",
             "-G",
+            "-k",
+            str(tater_features._SWUPDATE_KEY),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
@@ -717,6 +719,7 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
             stderr=tater_features.subprocess.DEVNULL,
         )
         self.assertEqual(self._messages("ota.status")[-1]["payload"]["status"], "rebooting")
+        self.assertEqual(self._messages("ota.status")[-1]["payload"]["progress"], 92)
 
 
 if __name__ == "__main__":
