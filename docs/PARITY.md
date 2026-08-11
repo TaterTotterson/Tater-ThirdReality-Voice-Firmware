@@ -21,13 +21,14 @@ use `--update` to advance the pin and then rerun CI and hardware tests.
 | Tater setup/reset command | Ready | Clears Wi-Fi and pairing, then reboots into `Tater-Setup-XXXX` |
 | Production-owned secure boot | Pending | SWUpdate is rekeyed; proprietary Amlogic boot-FIP trust is not |
 | Barge-in while TTS is playing | Not advertised | Client reports `barge_in: false` |
-| Synchronized stereo and multi-room | Software ready; hardware calibration pending | Audio-session v2 preload/commit, left/right/mono routing, 48 kHz playhead telemetry, and mpv rate-slew drift correction |
+| Synchronized stereo and multi-room | Ready; field tuning continues | Audio-session v2 preload/commit, left/right/mono routing, 48 kHz playhead telemetry, and mpv rate-slew drift correction have been exercised on physical S420 pairs |
 | Audio scenes and looping backgrounds | Partial | Looping media sessions are supported; the full ESP scene mixer is not advertised |
-| Physical-device regression pass | Pending | Requires a ThirdReality S420 unit and audio fixtures |
+| Physical-device regression pass | Core path complete | Local USB factory flashing, Tater boot verification, hotspot provisioning, pairing, voice/media playback, and signed OTA have been exercised on physical S420 hardware |
 
 Capabilities stay disabled in the native hello until their complete path is
-implemented and tested. The S420 now advertises the Tater audio-session v2
-stereo and multi-room primitives, but intentionally does not claim the ESP
-satellite's full scene mixer, synchronized TTS overlays, underrun recovery, or
-barge-in. Physical speaker-to-speaker calibration remains required before a
-release can be described as sample-aligned on S420 hardware.
+implemented and tested. The S420 advertises the Tater audio-session v2 stereo
+and multi-room primitives, but intentionally does not claim the ESP satellite's
+full scene mixer, synchronized TTS overlays, underrun recovery, or barge-in.
+Field testing may continue to refine speaker-to-speaker phase correction; the
+firmware does not promise laboratory sample alignment for every network and
+room.

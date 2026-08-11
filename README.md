@@ -34,9 +34,33 @@ A weekly CI check reports when Tater Linux Voice `main` moves ahead.
 
 ## Current status
 
-The software integration, security baseline, configuration checks, bridge unit
-tests, and a full signed Amlogic image build are complete. The remaining gate is
-an on-device audio and provisioning regression pass on physical S420 hardware.
+The S420 is now a supported Tater-native satellite with released factory and
+OTA images. The current release is `s420-0.2.4`. The complete first-install
+path has been exercised on physical hardware: Tater can use the ThirdReality
+debug board to enter Amlogic USB-burn mode, write the verified factory image,
+boot the speaker, and verify the installed Tater runtime.
+
+The everyday device path is also in place:
+
+- first-boot `Tater-Setup-XXXX` hotspot and captive portal
+- authenticated Tater pairing with persistent Wi-Fi, room, name, and settings
+- local wake word, microphone streaming, STT/TTS, continued chat, and timers
+- Tater-controlled wake model and threshold settings
+- ThirdReality LEDs, Home/Tap buttons, volume controls, and microphone mute
+- Tater-native music, ducked voice overlays, and audio-session v2 stereo and
+  synchronized multi-room playback
+- signed OTA from Tater, with routine updates preserving pairing and settings
+- serial logs and full factory recovery through the debug board
+
+The debug board is required only for a clean factory install or recovery; it is
+not required for routine OTA. Browser USB flashing is not supported because the
+S420 uses Amlogic USB-burn mode rather than the ESP WebUSB protocol.
+
+Remaining limitations are documented rather than blocking normal use. Tater
+does not claim ownership of the proprietary Amlogic secure-boot root, the full
+ESP audio-scene mixer and barge-in are not advertised, and real-world stereo
+calibration remains open to further tuning. Bluetooth, Sendspin, Music
+Assistant discovery, and mDNS are intentionally absent from this Tater build.
 
 See [the parity matrix](docs/PARITY.md) for the exact supported and deferred
 features. See [the runtime network policy](docs/NETWORK.md) for every fixed or

@@ -20,22 +20,26 @@ those remain factory/recovery-only so an update cannot trigger a setup reset.
 ## First install
 
 The full image is not an ESP image and must never be passed to `esptool`.
-Use the ThirdReality debug board and place the S420 into Amlogic USB burning
-mode according to the hardware instructions supplied with the board.
+Use **Tater → Settings → Voice → Firmware → Local USB**, select the
+ThirdReality S420, and follow the guided connection flow. Keep both the main USB
+cable and ThirdReality debug board connected. Tater verifies the release
+manifest and factory-image checksum, uses its pinned Amlogic helper to enter USB
+burn mode, writes every partition, reboots the speaker, and verifies that the
+installed Tater runtime starts successfully.
 
-On Windows, install the Amlogic USB Burning Tool from `tools/Aml_Burn_Tool.zip`,
-select the release's `*-factory.img`, keep the normal erase defaults, and start
-the burn. Do not remove power, the debug board, or USB until the tool reports
-100 percent success. The bundled program is the vendor's Windows utility; it
-is not executed by the firmware build or by Tater.
+This Local USB path is supported by the Tater macOS app. It cannot be moved to
+the ESP Browser USB flasher because the S420 uses Amlogic USB-burn mode and its
+debug console during recovery rather than an ESP WebUSB bootloader.
+
+As a manual Windows alternative, install the Amlogic USB Burning Tool from
+`tools/Aml_Burn_Tool.zip`, select the release's `*-factory.img`, keep the normal
+erase defaults, and start the burn. Do not remove power, the debug board, or USB
+until the tool reports 100 percent success. The bundled program is the vendor's
+Windows utility; it is not executed by the firmware build or by Tater.
 
 Linux x86_64 users may use the community `aml-linux-usb-burn` utility with the
 `axg` SoC setting. This path is not bundled because it contains proprietary
 Amlogic binaries and should be treated as an advanced recovery option.
-
-There is currently no supported raw Amlogic factory-burn backend for macOS.
-Tater therefore offers the verified factory image and these instructions on
-macOS instead of pretending the ESP browser flasher can program this device.
 
 After a successful first boot, join `Tater-Setup-XXXX` and open
 `http://192.168.4.1` to enter Wi-Fi and the Tater pairing code.
