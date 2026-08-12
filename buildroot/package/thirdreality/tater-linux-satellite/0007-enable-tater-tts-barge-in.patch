@@ -1,0 +1,35 @@
+From 6cf3ea10d2f31e2b29347739283b8d0f13ba22f1 Mon Sep 17 00:00:00 2001
+From: Tater Firmware <firmware@tater.local>
+Date: Wed, 12 Aug 2026 12:00:00 -0500
+Subject: [PATCH] enable Tater TTS barge-in
+
+Keep speaker feedback protection as the default, but allow a configured Tater
+wake word to interrupt an active TTS response and immediately begin a fresh
+voice turn. Other active pipeline states remain protected from duplicate wake
+detections.
+---
+ linux_voice_assistant/satellite.py | 9 +++++++--
+ 1 file changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/linux_voice_assistant/satellite.py b/linux_voice_assistant/satellite.py
+index 62bfaae..9b705d7 100644
+--- a/linux_voice_assistant/satellite.py
++++ b/linux_voice_assistant/satellite.py
+@@ -979,8 +979,13 @@ class Satellite:
+             return
+ 
+         if self._pipeline_active:
+-            _LOGGER.debug("Ignoring wake word - pipeline already active")
+-            return
++            barge_in = bool(getattr(self, "_tater_barge_in_enabled", False))
++            if (not barge_in) or (not self.tts_response_active):
++                _LOGGER.debug("Ignoring wake word - pipeline already active")
++                return
++            _LOGGER.info("Tater wake word interrupted the active TTS response")
++            self._continue_conversation = False
++            self.stop()
+ 
+         wake_word_phrase = wake_word.wake_word  # type: ignore[union-attr]
+         _LOGGER.debug("Detected wake word: %s", wake_word_phrase)
+-- 
+2.50.1

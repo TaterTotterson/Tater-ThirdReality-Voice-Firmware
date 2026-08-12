@@ -15,7 +15,7 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
-from urllib.parse import urljoin, urlparse
+from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 from urllib.request import Request, urlopen
 
 from .peripheral_api import LVAEvent
@@ -41,6 +41,11 @@ _MEDIA_DEFAULT_OUTPUT_LATENCY_FRAMES = 6144
 _MEDIA_MAX_OUTPUT_LATENCY_FRAMES = 24000
 _MEDIA_LATENCY_EMA_ALPHA = 0.25
 _MEDIA_LATENCY_LEARN_SAMPLES = 3
+_MEDIA_RECOVERY_THRESHOLD_FRAMES = 2400
+_MEDIA_RECOVERY_SEEK_TIMEOUT_SECONDS = 1.5
+_MEDIA_RECOVERY_FADE_SECONDS = 0.12
+_AUDIO_PREPARE_TIMEOUT_SECONDS = 10.0
+_AUDIO_RAMP_STEP_SECONDS = 0.02
 _MEDIA_CHANNELS = {"stereo", "left", "right", "mono"}
 _LED_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
 _LED_ANIMATIONS = {"pulse", "breathe", "heartbeat", "solid"}
@@ -272,6 +277,7 @@ class _MediaSession:
     channel: str
     start_position_ms: int
     prepare_requested: bool
+    source_url: str = ""
     loop: bool = False
     prepared: bool = False
     committed: bool = False
@@ -281,14 +287,54 @@ class _MediaSession:
     actual_start_us: int = 0
     output_latency_frames: int = _MEDIA_DEFAULT_OUTPUT_LATENCY_FRAMES
     latency_learning_samples: int = 0
+    timeline_base_frames: int = 0
     correction_frames_since_report: int = 0
     underrun_events: int = 0
+    rejoin_count: int = 0
+    rejoin_frames: int = 0
+    recovering: bool = False
     was_rebuffering: bool = False
     prepare_task: Optional[asyncio.Task[None]] = None
     commit_timeout_task: Optional[asyncio.Task[None]] = None
     start_task: Optional[asyncio.Task[None]] = None
     playhead_task: Optional[asyncio.Task[None]] = None
     adjust_task: Optional[asyncio.Task[None]] = None
+    recovery_task: Optional[asyncio.Task[None]] = None
+
+
+@dataclass
+class _OverlaySession:
+    overlay_id: str
+    url: str
+    group_id: str = ""
+    start_at_us: int = 0
+    volume_percent: int = 100
+    duck_target: float = 0.2
+    attack_ms: int = 150
+    release_ms: int = 350
+    continue_conversation: bool = False
+    generation: int = 0
+    task: Optional[asyncio.Task[None]] = None
+    started: bool = False
+    finished: bool = False
+
+
+@dataclass
+class _AudioScene:
+    scene_id: str
+    foreground_url: str
+    background_url: str = ""
+    foreground_volume_percent: int = 100
+    background_volume_percent: int = 60
+    background_loop: bool = True
+    duck_target: float = 0.2
+    attack_ms: int = 150
+    release_ms: int = 350
+    fade_ms: int = 350
+    generation: int = 0
+    task: Optional[asyncio.Task[None]] = None
+    started: bool = False
+    finished: bool = False
 
 
 class TaterFeatureManager:
@@ -303,6 +349,11 @@ class TaterFeatureManager:
         self.media_group_id = ""
         self.media_started_at = 0.0
         self.media_session: Optional[_MediaSession] = None
+        self.overlay_session: Optional[_OverlaySession] = None
+        self.audio_scene: Optional[_AudioScene] = None
+        self._overlay_generation = 0
+        self._scene_generation = 0
+        self._music_duck_factor = 1.0
         self._sync_player_available = bool(
             getattr(self.state.music_player, "synchronized_controls_available", False)
             and all(
@@ -317,11 +368,27 @@ class TaterFeatureManager:
                 )
             )
         )
+        self._sync_overlay_available = bool(
+            self._sync_player_available
+            and getattr(self.state.tts_player, "synchronized_controls_available", False)
+            and all(
+                callable(getattr(self.state.tts_player, method, None))
+                for method in (
+                    "prepare_synchronized",
+                    "synchronized_snapshot",
+                    "reset_synchronized",
+                    "resume",
+                )
+            )
+        )
         self.ota_task: Optional[asyncio.Task[None]] = None
         self.wake_model_task: Optional[asyncio.Task[None]] = None
         self.wake_model_generation = 0
         self.wake_model_downloading = False
         self.settings = self._load_settings()
+        self.satellite._tater_barge_in_enabled = _truthy(  # pylint: disable=protected-access
+            self.settings.get("barge_in_enabled")
+        )
         self.capabilities: dict[str, Any] = {
             "live_settings": True,
             "custom_wake_words": True,
@@ -333,8 +400,9 @@ class TaterFeatureManager:
             "media_session_volume": True,
             "audio_ducking": True,
             "tts_overlays": True,
-            "audio_scenes": False,
-            "looping_background_audio": False,
+            "audio_scenes": self._sync_overlay_available,
+            "looping_background_audio": self._sync_overlay_available,
+            "barge_in": True,
             "synchronized_media_sessions": self._sync_player_available,
             "stereo_channel_selection": self._sync_player_available,
             "media_playhead_telemetry": self._sync_player_available,
@@ -344,16 +412,76 @@ class TaterFeatureManager:
             "media_output_latency_frames": (
                 _MEDIA_DEFAULT_OUTPUT_LATENCY_FRAMES if self._sync_player_available else 0
             ),
-            "media_underrun_recovery": False,
+            "media_underrun_recovery": self._sync_player_available,
             "media_session_start_position": self._sync_player_available,
-            "synchronized_tts_overlays": False,
+            "synchronized_tts_overlays": self._sync_overlay_available,
             "audio_session_version": 2 if self._sync_player_available else 1,
-            "audio_scene_version": 0,
+            "audio_scene_version": 1 if self._sync_overlay_available else 0,
             "media_sample_rate_hz": _MEDIA_SAMPLE_RATE_HZ,
         }
 
     def _send(self, message_type: str, payload: Optional[dict[str, Any]] = None) -> None:
         self.client._submit_frame(_frame(message_type, payload))  # pylint: disable=protected-access
+
+    def _call_soon(self, callback: Any, *args: Any) -> None:
+        """Run player callbacks on the asyncio loop that owns this manager."""
+        loop = getattr(self.client, "_loop", None)
+        if loop is not None and not loop.is_closed():
+            loop.call_soon_threadsafe(callback, *args)
+            return
+        try:
+            asyncio.get_running_loop().call_soon(callback, *args)
+        except RuntimeError:
+            callback(*args)
+
+    async def _sleep_until_us(self, deadline_us: int) -> None:
+        while deadline_us > 0:
+            remaining_us = deadline_us - (time.monotonic_ns() // 1000)
+            if remaining_us <= 0:
+                return
+            if remaining_us > 20_000:
+                await asyncio.sleep((remaining_us - 10_000) / 1_000_000.0)
+            elif remaining_us > 1_000:
+                await asyncio.sleep(0.001)
+            else:
+                await asyncio.sleep(0)
+
+    async def _wait_player_ready(self, player: Any, timeout: float) -> dict[str, Any]:
+        deadline = time.monotonic() + timeout
+        last_snapshot: dict[str, Any] = {}
+        while time.monotonic() < deadline:
+            last_snapshot = player.synchronized_snapshot()
+            if _truthy(last_snapshot.get("loaded")) and not _truthy(last_snapshot.get("seeking")):
+                return last_snapshot
+            await asyncio.sleep(0.02)
+        raise TimeoutError("audio preparation timed out")
+
+    def _set_music_duck(self, factor: float) -> None:
+        self._music_duck_factor = max(0.0, min(1.0, float(factor)))
+        if self._music_duck_factor >= 0.999:
+            self.state.music_player.unduck()
+        else:
+            self.state.music_player.duck(self._music_duck_factor)
+
+    async def _ramp_music_duck(self, target: float, duration_ms: int) -> None:
+        target = max(0.0, min(1.0, float(target)))
+        duration_seconds = max(0.0, duration_ms / 1000.0)
+        start = self._music_duck_factor
+        if duration_seconds <= 0.0 or abs(target - start) < 0.001:
+            self._set_music_duck(target)
+            return
+        steps = max(1, int(round(duration_seconds / _AUDIO_RAMP_STEP_SECONDS)))
+        step_delay = duration_seconds / steps
+        for index in range(1, steps + 1):
+            self._set_music_duck(start + ((target - start) * index / steps))
+            await asyncio.sleep(step_delay)
+
+    @staticmethod
+    def _url_with_start(url: str, position_seconds: float) -> str:
+        parsed = urlparse(url)
+        query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+        query["start"] = f"{max(0.0, position_seconds):.3f}"
+        return urlunparse(parsed._replace(query=urlencode(query)))
 
     def _load_settings(self) -> dict[str, Any]:
         try:
@@ -378,6 +506,10 @@ class TaterFeatureManager:
     def disconnected(self) -> None:
         # Timers intentionally remain local and keep counting during a server
         # reconnect. Media is stopped because its remote session is gone.
+        if self.audio_scene is not None:
+            self._stop_audio_scene(ok=False, notify=False)
+        if self.overlay_session is not None:
+            self._stop_overlay(ok=False, notify=False)
         if self.media_session_id:
             self._stop_media(ok=False, notify=False)
 
@@ -423,12 +555,6 @@ class TaterFeatureManager:
         if message_type == "settings":
             self._apply_settings(payload, persist=True)
             return True
-        if message_type == "play.url" and "continue_conversation" not in payload:
-            # A per-response value from Tater always wins. Otherwise apply the
-            # persisted device preference so the live setting has real runtime
-            # behavior instead of being metadata-only.
-            payload["continue_conversation"] = _truthy(self.settings.get("continued_chat"))
-            return False
         if message_type == "audio.clock.sync":
             receive_us = time.monotonic_ns() // 1000
             self._send(
@@ -462,6 +588,12 @@ class TaterFeatureManager:
             return True
         if message_type == "audio.overlay.start":
             self._start_overlay(payload)
+            return True
+        if message_type == "audio.scene.start":
+            self._start_audio_scene(payload)
+            return True
+        if message_type == "audio.scene.stop":
+            self._stop_audio_scene(ok=False)
             return True
         if message_type in {"setup.reset", "provisioning.reset"}:
             asyncio.create_task(self._reset_setup())
@@ -626,6 +758,8 @@ class TaterFeatureManager:
                 applied["wake_word_url"] = wake_word_url
         if "continued_chat" in payload:
             applied["continued_chat"] = _truthy(payload.get("continued_chat"))
+        if "barge_in_enabled" in payload:
+            applied["barge_in_enabled"] = _truthy(payload.get("barge_in_enabled"))
         if "logging_level" in payload:
             level_name = str(payload.get("logging_level") or "info").strip().upper()
             level = getattr(logging, level_name, logging.INFO)
@@ -645,6 +779,9 @@ class TaterFeatureManager:
                 applied[key] = animation
         if applied:
             self.settings.update(applied)
+            self.satellite._tater_barge_in_enabled = _truthy(  # pylint: disable=protected-access
+                self.settings.get("barge_in_enabled")
+            )
             if persist:
                 self._save_settings()
         if {"wake_word", "wake_word_url", "wake_engine"}.intersection(payload):
@@ -768,6 +905,11 @@ class TaterFeatureManager:
             self._start_legacy_media(payload, reply_to, url)
             return
 
+        if self.audio_scene is not None:
+            self._stop_audio_scene(ok=False)
+        if self.overlay_session is not None:
+            self._stop_overlay(ok=False)
+        self._set_music_duck(1.0)
         if self.media_session is not None:
             self._stop_media(ok=False)
         session_id = str(payload.get("session_id") or reply_to or uuid.uuid4().hex).strip()
@@ -785,6 +927,7 @@ class TaterFeatureManager:
             channel=channel,
             start_position_ms=_integer(media.get("start_position_ms"), maximum=7 * 24 * 60 * 60 * 1000),
             prepare_requested=prepare,
+            source_url=url,
             loop=_truthy(media.get("loop")),
         )
         self.media_session = session
@@ -939,6 +1082,10 @@ class TaterFeatureManager:
     def _schedule_media_start(self, session: _MediaSession, start_at_us: int) -> None:
         session.committed = True
         session.scheduled_start_us = start_at_us
+        if session.audible_start_us <= 0:
+            session.audible_start_us = start_at_us + int(
+                round(session.output_latency_frames * 1_000_000.0 / _MEDIA_SAMPLE_RATE_HZ)
+            )
         if session.commit_timeout_task is not None:
             session.commit_timeout_task.cancel()
             session.commit_timeout_task = None
@@ -988,17 +1135,28 @@ class TaterFeatureManager:
                     return
                 snapshot = self.state.music_player.synchronized_snapshot()
                 now_us = time.monotonic_ns() // 1000
-                rebuffering = _truthy(snapshot.get("rebuffering"))
-                if rebuffering and not session.was_rebuffering:
+                raw_rebuffering = _truthy(snapshot.get("rebuffering"))
+                was_rebuffering = session.was_rebuffering
+                if raw_rebuffering and not session.was_rebuffering:
                     session.underrun_events += 1
-                session.was_rebuffering = rebuffering
+                elif (
+                    was_rebuffering
+                    and not raw_rebuffering
+                    and not session.loop
+                    and (session.recovery_task is None or session.recovery_task.done())
+                ):
+                    session.recovery_task = asyncio.create_task(
+                        self._recover_media_timeline(session)
+                    )
+                session.was_rebuffering = raw_rebuffering
+                rebuffering = raw_rebuffering or session.recovering
                 correction_frames = session.correction_frames_since_report
                 session.correction_frames_since_report = 0
-                source_frames = int(
+                source_frames = session.timeline_base_frames + int(
                     max(0.0, float(snapshot.get("timeline_position_seconds") or snapshot.get("position_seconds") or 0.0))
                     * _MEDIA_SAMPLE_RATE_HZ
                 )
-                rendered_frames = int(
+                rendered_frames = session.timeline_base_frames + int(
                     max(0.0, float(snapshot.get("rendered_position_seconds") or snapshot.get("position_seconds") or 0.0))
                     * _MEDIA_SAMPLE_RATE_HZ
                 )
@@ -1046,12 +1204,128 @@ class TaterFeatureManager:
                         "correction_frames": correction_frames,
                         "rebuffering": rebuffering,
                         "underrun_events": session.underrun_events,
+                        "rejoin_count": session.rejoin_count,
+                        "rejoin_frames": session.rejoin_frames,
                     },
                 )
         except asyncio.CancelledError:
             return
         except Exception:  # pylint: disable=broad-except
             _LOGGER.exception("Unable to report synchronized media playhead")
+
+    async def _recover_media_timeline(self, session: _MediaSession) -> None:
+        """Rejoin the shared audible timeline after an mpv cache underrun."""
+        try:
+            session.recovering = True
+            while (
+                self.media_session is session
+                and (
+                    (self.overlay_session is not None and not self.overlay_session.finished)
+                    or (self.audio_scene is not None and not self.audio_scene.finished)
+                )
+            ):
+                await asyncio.sleep(0.05)
+            if self.media_session is not session or not session.started:
+                return
+
+            now_us = time.monotonic_ns() // 1000
+            audible_start_us = session.audible_start_us or session.actual_start_us
+            expected_frames = int(
+                round(session.start_position_ms * _MEDIA_SAMPLE_RATE_HZ / 1000.0)
+            ) + int(
+                round(
+                    max(0, now_us - audible_start_us)
+                    * _MEDIA_SAMPLE_RATE_HZ
+                    / 1_000_000.0
+                )
+            )
+            snapshot = self.state.music_player.synchronized_snapshot()
+            current_frames = session.timeline_base_frames + int(
+                max(
+                    0.0,
+                    float(
+                        snapshot.get("timeline_position_seconds")
+                        or snapshot.get("position_seconds")
+                        or 0.0
+                    ),
+                )
+                * _MEDIA_SAMPLE_RATE_HZ
+            )
+            skipped_frames = expected_frames - current_frames
+            if skipped_frames <= _MEDIA_RECOVERY_THRESHOLD_FRAMES:
+                return
+
+            prior_duck = self._music_duck_factor
+            await self._ramp_music_duck(0.0, int(_MEDIA_RECOVERY_FADE_SECONDS * 1000))
+            pause = getattr(self.state.music_player, "pause", None)
+            if callable(pause):
+                pause()
+
+            target_seconds = expected_frames / _MEDIA_SAMPLE_RATE_HZ
+            local_target_seconds = max(
+                0.0,
+                (expected_frames - session.timeline_base_frames) / _MEDIA_SAMPLE_RATE_HZ,
+            )
+            seek_ok = False
+            try:
+                self.state.music_player.seek_synchronized(local_target_seconds)
+                deadline = time.monotonic() + _MEDIA_RECOVERY_SEEK_TIMEOUT_SECONDS
+                while self.media_session is session and time.monotonic() < deadline:
+                    seek_snapshot = self.state.music_player.synchronized_snapshot()
+                    local_frames = int(
+                        max(
+                            0.0,
+                            float(
+                                seek_snapshot.get("timeline_position_seconds")
+                                or seek_snapshot.get("position_seconds")
+                                or 0.0
+                            ),
+                        )
+                        * _MEDIA_SAMPLE_RATE_HZ
+                    )
+                    if (
+                        not _truthy(seek_snapshot.get("seeking"))
+                        and abs(local_frames - int(round(local_target_seconds * _MEDIA_SAMPLE_RATE_HZ)))
+                        <= _MEDIA_RECOVERY_THRESHOLD_FRAMES
+                    ):
+                        seek_ok = True
+                        break
+                    await asyncio.sleep(0.02)
+            except Exception:  # pylint: disable=broad-except
+                _LOGGER.debug("Exact media seek failed; reloading from Tater timeline", exc_info=True)
+
+            if not seek_ok:
+                recovery_url = self._url_with_start(session.source_url, target_seconds)
+                self.state.music_player.prepare_synchronized(
+                    recovery_url,
+                    channel=session.channel,
+                    loop=False,
+                    done_callback=lambda: self._media_player_finished(session.session_id),
+                )
+                await self._wait_player_ready(
+                    self.state.music_player,
+                    _MEDIA_RECOVERY_SEEK_TIMEOUT_SECONDS,
+                )
+                session.timeline_base_frames = expected_frames
+
+            if self.media_session is not session:
+                return
+            self.state.music_player.resume()
+            await self._ramp_music_duck(prior_duck, int(_MEDIA_RECOVERY_FADE_SECONDS * 1000))
+            session.rejoin_count += 1
+            session.rejoin_frames += max(0, skipped_frames)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # pylint: disable=broad-except
+            _LOGGER.exception("Unable to rejoin synchronized media after an underrun")
+            if self.media_session is session:
+                self._set_music_duck(1.0)
+                try:
+                    self.state.music_player.resume()
+                except Exception:  # pylint: disable=broad-except
+                    _LOGGER.exception("Unable to resume media after recovery failure")
+        finally:
+            session.recovering = False
 
     def _adjust_media(self, payload: dict[str, Any], reply_to: str) -> None:
         session = self.media_session
@@ -1110,6 +1384,7 @@ class TaterFeatureManager:
             session.start_task,
             session.playhead_task,
             session.adjust_task,
+            session.recovery_task,
         ):
             if task is not None and task is not current and not task.done():
                 task.cancel()
@@ -1133,6 +1408,8 @@ class TaterFeatureManager:
         self._send("media.session.finished", {"session_id": session_id, "group_id": group_id, "ok": ok})
 
     def _stop_media(self, *, ok: bool, notify: bool = True) -> None:
+        if self.overlay_session is not None:
+            self._stop_overlay(ok=False, notify=notify)
         session = self.media_session
         session_id = self.media_session_id
         group_id = self.media_group_id
@@ -1167,16 +1444,277 @@ class TaterFeatureManager:
         if not url:
             self._send("audio.overlay.finished", {"overlay_id": overlay_id, "ok": False})
             return
-        factor = _integer(ducking.get("target_percent"), 20, maximum=100) / 100.0
-        self.state.music_player.duck(factor)
-        self.state.tts_player.set_volume(_integer(foreground.get("volume_percent"), 100, maximum=100))
-        self._send("audio.overlay.started", {"overlay_id": overlay_id})
+        if self.audio_scene is not None:
+            self._stop_audio_scene(ok=False)
+        if self.overlay_session is not None:
+            self._stop_overlay(ok=False)
+        self._overlay_generation += 1
+        session = _OverlaySession(
+            overlay_id=overlay_id,
+            url=url,
+            group_id=str(payload.get("group_id") or "").strip(),
+            start_at_us=_integer(payload.get("start_at_us"), maximum=2**63 - 1),
+            volume_percent=_integer(foreground.get("volume_percent"), 100, maximum=100),
+            duck_target=_integer(ducking.get("target_percent"), 20, maximum=100) / 100.0,
+            attack_ms=_integer(ducking.get("attack_ms"), 150, maximum=10000),
+            release_ms=_integer(ducking.get("release_ms"), 350, maximum=10000),
+            continue_conversation=_truthy(payload.get("continue_conversation")),
+            generation=self._overlay_generation,
+        )
+        self.overlay_session = session
+        session.task = asyncio.create_task(self._run_overlay(session))
+
+    async def _run_overlay(self, session: _OverlaySession) -> None:
+        loop = asyncio.get_running_loop()
+        playback_finished: asyncio.Future[None] = loop.create_future()
 
         def finished() -> None:
-            self.state.music_player.unduck()
-            self._send("audio.overlay.finished", {"overlay_id": overlay_id, "ok": True})
+            def resolve() -> None:
+                if not playback_finished.done():
+                    playback_finished.set_result(None)
 
-        self.state.tts_player.play(url, done_callback=finished, stop_first=True)
+            self._call_soon(resolve)
+
+        try:
+            self.state.tts_player.set_volume(session.volume_percent)
+            if not self._sync_overlay_available:
+                await self._ramp_music_duck(session.duck_target, session.attack_ms)
+                self.state.tts_player.play(session.url, done_callback=finished, stop_first=True)
+                session.started = True
+                actual_start_us = time.monotonic_ns() // 1000
+                self._send(
+                    "audio.overlay.started",
+                    {
+                        "overlay_id": session.overlay_id,
+                        "group_id": session.group_id,
+                        "scheduled_start_us": session.start_at_us,
+                        "actual_start_us": actual_start_us,
+                        "late_by_us": max(0, actual_start_us - session.start_at_us)
+                        if session.start_at_us
+                        else 0,
+                    },
+                )
+            else:
+                self.state.tts_player.prepare_synchronized(
+                    session.url,
+                    channel="mono",
+                    loop=False,
+                    done_callback=finished,
+                )
+                await self._wait_player_ready(self.state.tts_player, _AUDIO_PREPARE_TIMEOUT_SECONDS)
+                output_latency_frames = (
+                    self.media_session.output_latency_frames
+                    if self.media_session is not None
+                    else _MEDIA_DEFAULT_OUTPUT_LATENCY_FRAMES
+                )
+                latency_us = int(
+                    round(output_latency_frames * 1_000_000.0 / _MEDIA_SAMPLE_RATE_HZ)
+                )
+                audible_deadline_us = session.start_at_us or (
+                    (time.monotonic_ns() // 1000) + latency_us
+                )
+                resume_at_us = audible_deadline_us - latency_us
+                await self._sleep_until_us(resume_at_us - (session.attack_ms * 1000))
+                await self._ramp_music_duck(session.duck_target, session.attack_ms)
+                await self._sleep_until_us(resume_at_us)
+                if self.overlay_session is not session:
+                    return
+                self.state.tts_player.resume()
+                actual_resume_us = time.monotonic_ns() // 1000
+                actual_audible_us = actual_resume_us + latency_us
+                session.started = True
+                self._send(
+                    "audio.overlay.started",
+                    {
+                        "overlay_id": session.overlay_id,
+                        "group_id": session.group_id,
+                        "scheduled_start_us": audible_deadline_us,
+                        "actual_start_us": actual_audible_us,
+                        "late_by_us": actual_audible_us - audible_deadline_us,
+                        "output_latency_frames": output_latency_frames,
+                    },
+                )
+
+            await playback_finished
+            if self.overlay_session is not session:
+                return
+            await self._ramp_music_duck(1.0, session.release_ms)
+            if self._sync_overlay_available:
+                self.state.tts_player.reset_synchronized()
+            session.finished = True
+            self.overlay_session = None
+            self._send(
+                "audio.overlay.finished",
+                {
+                    "overlay_id": session.overlay_id,
+                    "group_id": session.group_id,
+                    "ok": True,
+                    "continue_conversation": session.continue_conversation,
+                },
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # pylint: disable=broad-except
+            _LOGGER.exception("Unable to play Tater audio overlay")
+            if self.overlay_session is session:
+                self._finish_overlay_failure(session)
+
+    def _finish_overlay_failure(self, session: _OverlaySession) -> None:
+        session.finished = True
+        self.overlay_session = None
+        self._set_music_duck(1.0)
+        try:
+            self.state.tts_player.stop()
+            if self._sync_overlay_available:
+                self.state.tts_player.reset_synchronized()
+        except Exception:  # pylint: disable=broad-except
+            _LOGGER.exception("Unable to reset failed overlay player")
+        self._send(
+            "audio.overlay.finished",
+            {"overlay_id": session.overlay_id, "group_id": session.group_id, "ok": False},
+        )
+
+    def _stop_overlay(self, *, ok: bool, notify: bool = True) -> None:
+        session = self.overlay_session
+        if session is None:
+            return
+        self._overlay_generation += 1
+        self.overlay_session = None
+        session.finished = True
+        try:
+            current = asyncio.current_task()
+        except RuntimeError:
+            current = None
+        if session.task is not None and session.task is not current and not session.task.done():
+            session.task.cancel()
+        try:
+            self.state.tts_player.stop()
+            if self._sync_overlay_available:
+                self.state.tts_player.reset_synchronized()
+        except Exception:  # pylint: disable=broad-except
+            _LOGGER.exception("Unable to stop audio overlay")
+        self._set_music_duck(1.0)
+        if notify:
+            self._send(
+                "audio.overlay.finished",
+                {"overlay_id": session.overlay_id, "group_id": session.group_id, "ok": ok},
+            )
+
+    def _start_audio_scene(self, payload: dict[str, Any]) -> None:
+        foreground = payload.get("foreground") if isinstance(payload.get("foreground"), dict) else {}
+        background = payload.get("background") if isinstance(payload.get("background"), dict) else {}
+        ducking = payload.get("ducking") if isinstance(payload.get("ducking"), dict) else {}
+        finish = payload.get("finish") if isinstance(payload.get("finish"), dict) else {}
+        scene_id = str(payload.get("scene_id") or uuid.uuid4().hex).strip()
+        foreground_url = str(foreground.get("url") or "").strip()
+        if not foreground_url or not self._sync_overlay_available:
+            self._send("audio.scene.finished", {"scene_id": scene_id, "ok": False})
+            return
+        if self.audio_scene is not None:
+            self._stop_audio_scene(ok=False)
+        if self.overlay_session is not None:
+            self._stop_overlay(ok=False)
+        if self.media_session_id:
+            self._stop_media(ok=False)
+        self._scene_generation += 1
+        scene = _AudioScene(
+            scene_id=scene_id,
+            foreground_url=foreground_url,
+            background_url=str(background.get("url") or "").strip(),
+            foreground_volume_percent=_integer(foreground.get("volume_percent"), 100, maximum=100),
+            background_volume_percent=_integer(background.get("volume_percent"), 60, maximum=100),
+            background_loop=_truthy(background.get("loop", True)),
+            duck_target=_integer(ducking.get("target_percent"), 20, maximum=100) / 100.0,
+            attack_ms=_integer(ducking.get("attack_ms"), 150, maximum=10000),
+            release_ms=_integer(ducking.get("release_ms"), 350, maximum=10000),
+            fade_ms=_integer(finish.get("fade_ms"), 350, maximum=10000),
+            generation=self._scene_generation,
+        )
+        self.audio_scene = scene
+        scene.task = asyncio.create_task(self._run_audio_scene(scene))
+
+    async def _run_audio_scene(self, scene: _AudioScene) -> None:
+        loop = asyncio.get_running_loop()
+        foreground_finished: asyncio.Future[None] = loop.create_future()
+
+        def finished() -> None:
+            def resolve() -> None:
+                if not foreground_finished.done():
+                    foreground_finished.set_result(None)
+
+            self._call_soon(resolve)
+
+        try:
+            self.state.tts_player.set_volume(scene.foreground_volume_percent)
+            self.state.tts_player.prepare_synchronized(
+                scene.foreground_url,
+                channel="mono",
+                loop=False,
+                done_callback=finished,
+            )
+            if scene.background_url:
+                self.state.music_player.set_volume(scene.background_volume_percent)
+                self.state.music_player.prepare_synchronized(
+                    scene.background_url,
+                    channel="stereo",
+                    loop=scene.background_loop,
+                )
+            await self._wait_player_ready(self.state.tts_player, _AUDIO_PREPARE_TIMEOUT_SECONDS)
+            if scene.background_url:
+                await self._wait_player_ready(self.state.music_player, _AUDIO_PREPARE_TIMEOUT_SECONDS)
+            if self.audio_scene is not scene:
+                return
+
+            if scene.background_url:
+                self._set_music_duck(1.0)
+                self.state.music_player.resume()
+                await self._ramp_music_duck(scene.duck_target, scene.attack_ms)
+            self.state.tts_player.resume()
+            scene.started = True
+            await foreground_finished
+            if self.audio_scene is not scene:
+                return
+
+            if scene.background_url:
+                await self._ramp_music_duck(1.0, scene.release_ms)
+                await self._ramp_music_duck(0.0, scene.fade_ms)
+                self.state.music_player.stop()
+            self.state.tts_player.reset_synchronized()
+            self.state.music_player.reset_synchronized()
+            self._set_music_duck(1.0)
+            scene.finished = True
+            self.audio_scene = None
+            self._send("audio.scene.finished", {"scene_id": scene.scene_id, "ok": True})
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # pylint: disable=broad-except
+            _LOGGER.exception("Unable to play Tater audio scene")
+            if self.audio_scene is scene:
+                self._stop_audio_scene(ok=False)
+
+    def _stop_audio_scene(self, *, ok: bool, notify: bool = True) -> None:
+        scene = self.audio_scene
+        if scene is None:
+            return
+        self._scene_generation += 1
+        self.audio_scene = None
+        scene.finished = True
+        try:
+            current = asyncio.current_task()
+        except RuntimeError:
+            current = None
+        if scene.task is not None and scene.task is not current and not scene.task.done():
+            scene.task.cancel()
+        try:
+            self.state.tts_player.stop()
+            self.state.music_player.stop()
+            self.state.tts_player.reset_synchronized()
+            self.state.music_player.reset_synchronized()
+        except Exception:  # pylint: disable=broad-except
+            _LOGGER.exception("Unable to stop audio scene")
+        self._set_music_duck(1.0)
+        if notify:
+            self._send("audio.scene.finished", {"scene_id": scene.scene_id, "ok": ok})
 
     async def _reset_setup(self) -> None:
         self._send("log", {"level": "warn", "message": "Setup reset requested by Tater; rebooting into setup mode."})
@@ -1269,6 +1807,10 @@ class TaterFeatureManager:
             raise
 
     async def close(self) -> None:
+        if self.audio_scene is not None:
+            self._stop_audio_scene(ok=False, notify=False)
+        if self.overlay_session is not None:
+            self._stop_overlay(ok=False, notify=False)
         if self.media_session_id:
             self._stop_media(ok=False, notify=False)
         for timer in self.timers.values():

@@ -75,6 +75,7 @@ class _Player:
         }
         self.speed = 1.0
         self.resume_count = 0
+        self.pause_count = 0
 
     def set_volume(self, value):
         self.volume = value
@@ -105,6 +106,10 @@ class _Player:
     def resume(self):
         self.resume_count += 1
         self.snapshot["paused"] = False
+
+    def pause(self):
+        self.pause_count += 1
+        self.snapshot["paused"] = True
 
     def stop(self):
         callback = self.done_callback
@@ -223,8 +228,14 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.manager.capabilities["media_drift_correction"])
         self.assertTrue(self.manager.capabilities["media_rate_slew"])
         self.assertTrue(self.manager.capabilities["media_render_clock"])
+        self.assertTrue(self.manager.capabilities["media_underrun_recovery"])
+        self.assertTrue(self.manager.capabilities["synchronized_tts_overlays"])
+        self.assertTrue(self.manager.capabilities["audio_scenes"])
+        self.assertTrue(self.manager.capabilities["looping_background_audio"])
+        self.assertTrue(self.manager.capabilities["barge_in"])
         self.assertEqual(self.manager.capabilities["media_output_latency_frames"], 6144)
         self.assertEqual(self.manager.capabilities["audio_session_version"], 2)
+        self.assertEqual(self.manager.capabilities["audio_scene_version"], 1)
 
     async def test_timer_start_list_and_cancel_round_trip(self) -> None:
         self.assertTrue(
@@ -260,6 +271,7 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
                     "volume_percent": 42,
                     "wake_threshold": 0.91,
                     "logging_level": "warning",
+                    "barge_in_enabled": True,
                 },
             }
         )
@@ -269,6 +281,8 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(self.client.state.wake_word_1_threshold, 0.91)
         persisted = json.loads(tater_features._SETTINGS_PATH.read_text(encoding="utf-8"))
         self.assertEqual(persisted["volume_percent"], 42)
+        self.assertTrue(persisted["barge_in_enabled"])
+        self.assertTrue(self.client.satellite._tater_barge_in_enabled)
 
     async def test_invalid_settings_do_not_break_the_native_session(self) -> None:
         self.manager.handle_message(
@@ -443,13 +457,20 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(config_path.read_bytes(), previous_config)
         self.assertEqual(model_path.read_bytes(), previous_model)
 
-    async def test_continued_chat_setting_applies_when_response_has_no_override(self) -> None:
+    async def test_continued_chat_setting_does_not_override_tater_response_decision(self) -> None:
         self.manager.handle_message(
             {"type": "settings", "payload": {"continued_chat": True}}
         )
         body = {"type": "play.url", "payload": {"url": "https://tater.test/reply.flac"}}
         self.assertFalse(self.manager.handle_message(body))
-        self.assertTrue(body["payload"]["continue_conversation"])
+        self.assertNotIn("continue_conversation", body["payload"])
+
+        reopen = {
+            "type": "play.url",
+            "payload": {"url": "https://tater.test/reply.flac", "continue_conversation": True},
+        }
+        self.assertFalse(self.manager.handle_message(reopen))
+        self.assertTrue(reopen["payload"]["continue_conversation"])
 
         explicit = {
             "type": "play.url",
@@ -481,15 +502,111 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
                 "payload": {
                     "overlay_id": "reply-1",
                     "foreground": {"url": "https://tater.test/reply.flac"},
-                    "ducking": {"target_percent": 25},
+                    "ducking": {
+                        "target_percent": 25,
+                        "attack_ms": 0,
+                        "release_ms": 0,
+                    },
                 },
             }
         )
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
         self.assertEqual(self.client.state.music_player.duck_factor, 0.25)
         self.assertTrue(self._messages("audio.overlay.started"))
         self.client.state.tts_player.done_callback()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
         self.assertIsNone(self.client.state.music_player.duck_factor)
         self.assertTrue(self._messages("audio.overlay.finished"))
+
+    async def test_synchronized_overlay_honors_audible_deadline(self) -> None:
+        start_at_us = (tater_features.time.monotonic_ns() // 1000) + 180_000
+        self.manager.handle_message(
+            {
+                "type": "audio.overlay.start",
+                "payload": {
+                    "overlay_id": "scheduled-reply",
+                    "group_id": "kitchen-pair",
+                    "start_at_us": start_at_us,
+                    "foreground": {"url": "https://tater.test/reply.flac"},
+                    "ducking": {"target_percent": 30, "attack_ms": 0, "release_ms": 0},
+                },
+            }
+        )
+        await asyncio.sleep(0.02)
+        self.assertFalse(self._messages("audio.overlay.started"))
+        await asyncio.sleep(0.18)
+        started = self._messages("audio.overlay.started")[-1]["payload"]
+        self.assertEqual(started["scheduled_start_us"], start_at_us)
+        self.assertEqual(started["group_id"], "kitchen-pair")
+        self.assertGreaterEqual(self.client.state.tts_player.resume_count, 1)
+        self.client.state.tts_player.done_callback()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+    async def test_audio_scene_mixes_background_and_foreground_then_fades(self) -> None:
+        self.manager.handle_message(
+            {
+                "type": "audio.scene.start",
+                "payload": {
+                    "scene_id": "weather-scene",
+                    "foreground": {
+                        "url": "https://tater.test/weather.flac",
+                        "volume_percent": 95,
+                    },
+                    "background": {
+                        "url": "https://tater.test/bed.flac",
+                        "volume_percent": 60,
+                        "loop": True,
+                    },
+                    "ducking": {"target_percent": 35, "attack_ms": 0, "release_ms": 0},
+                    "finish": {"fade_ms": 0},
+                },
+            }
+        )
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        self.assertEqual(
+            self.client.state.music_player.prepared[-1],
+            ("https://tater.test/bed.flac", "stereo", True),
+        )
+        self.assertEqual(
+            self.client.state.tts_player.prepared[-1],
+            ("https://tater.test/weather.flac", "mono", False),
+        )
+        self.assertEqual(self.client.state.music_player.duck_factor, 0.35)
+        self.assertGreaterEqual(self.client.state.music_player.resume_count, 1)
+        self.assertGreaterEqual(self.client.state.tts_player.resume_count, 1)
+        self.client.state.tts_player.done_callback()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        finished = self._messages("audio.scene.finished")[-1]["payload"]
+        self.assertEqual(finished, {"scene_id": "weather-scene", "ok": True})
+        self.assertIsNone(self.client.state.music_player.duck_factor)
+
+    async def test_media_underrun_rejoins_shared_timeline(self) -> None:
+        self.manager.handle_message(
+            {
+                "type": "media.session.start",
+                "id": "media-request",
+                "payload": {
+                    "session_id": "session-recovery",
+                    "media": {"url": "https://tater.test/music.flac"},
+                },
+            }
+        )
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        session = self.manager.media_session
+        self.assertIsNotNone(session)
+        session.audible_start_us = (tater_features.time.monotonic_ns() // 1000) - 2_000_000
+        self.client.state.music_player.snapshot["position_seconds"] = 0.0
+        await self.manager._recover_media_timeline(session)
+        self.assertEqual(session.rejoin_count, 1)
+        self.assertGreaterEqual(session.rejoin_frames, 90000)
+        self.assertGreaterEqual(self.client.state.music_player.pause_count, 1)
+        self.assertGreaterEqual(self.client.state.music_player.resume_count, 2)
 
     async def test_synchronized_media_prepare_commit_channel_and_playhead(self) -> None:
         original_interval = tater_features._MEDIA_PLAYHEAD_INTERVAL_SECONDS

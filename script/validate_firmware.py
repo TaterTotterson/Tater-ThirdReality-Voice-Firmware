@@ -34,6 +34,10 @@ TATER_SYNC_PLAYER_PATCH = (
     ROOT
     / "buildroot/package/thirdreality/tater-linux-satellite/0006-add-tater-synchronized-mpv-controls.patch"
 )
+TATER_BARGE_IN_PATCH = (
+    ROOT
+    / "buildroot/package/thirdreality/tater-linux-satellite/0007-enable-tater-tts-barge-in.patch"
+)
 TATER_FEATURES = (
     ROOT
     / "buildroot/package/thirdreality/tater-linux-satellite/files/tater_features.py"
@@ -118,6 +122,7 @@ def main() -> int:
     tater_native_only_patch = TATER_NATIVE_ONLY_PATCH.read_text(encoding="utf-8")
     tater_no_frame_sender_patch = TATER_NO_FRAME_SENDER_PATCH.read_text(encoding="utf-8")
     tater_sync_player_patch = TATER_SYNC_PLAYER_PATCH.read_text(encoding="utf-8")
+    tater_barge_in_patch = TATER_BARGE_IN_PATCH.read_text(encoding="utf-8")
     tater_features = TATER_FEATURES.read_text(encoding="utf-8")
     launcher = LAUNCHER.read_text(encoding="utf-8")
     hardware_bridge = HARDWARE_BRIDGE.read_text(encoding="utf-8")
@@ -255,7 +260,15 @@ def main() -> int:
     require('"tater_connected": state.connected' in tater_feature_patch, "peripheral snapshot still uses HA connection naming", errors)
     require('version     = "1.1.13.post1"' in tater_metadata_patch, "Tater Linux package version metadata is not fixed", errors)
     require('description = "Tater-native Linux voice satellite runtime"' in tater_metadata_patch, "legacy assistant metadata remains active", errors)
-    for capability in ("live_settings", "timers", "ota", "setup_mode", "persistent_media_sessions", "tts_overlays"):
+    for capability in (
+        "live_settings",
+        "timers",
+        "ota",
+        "setup_mode",
+        "persistent_media_sessions",
+        "tts_overlays",
+        "barge_in",
+    ):
         require(f'"{capability}": True' in tater_features, f"Tater feature is missing: {capability}", errors)
     for capability in (
         "synchronized_media_sessions",
@@ -273,6 +286,26 @@ def main() -> int:
     require(
         '"audio_session_version": 2 if self._sync_player_available else 1' in tater_features,
         "Tater audio-session v2 is not advertised with the synchronized player",
+        errors,
+    )
+    for capability in (
+        "audio_scenes",
+        "looping_background_audio",
+        "synchronized_tts_overlays",
+    ):
+        require(
+            f'"{capability}": self._sync_overlay_available' in tater_features,
+            f"audio mixer capability is not guarded by both mpv players: {capability}",
+            errors,
+        )
+    require(
+        '"media_underrun_recovery": self._sync_player_available' in tater_features,
+        "media underrun recovery is not guarded by synchronized mpv",
+        errors,
+    )
+    require(
+        '"audio_scene_version": 1 if self._sync_overlay_available else 0' in tater_features,
+        "Tater audio-scene v1 is not advertised with both synchronized players",
         errors,
     )
     require(
@@ -303,6 +336,25 @@ def main() -> int:
         "synchronized mpv rate correction can still insert the audible pitch filter",
         errors,
     )
+    require(
+        'getattr(self, "_tater_barge_in_enabled", False)' in tater_barge_in_patch
+        and "self.tts_response_active" in tater_barge_in_patch
+        and "self.stop()" in tater_barge_in_patch,
+        "Tater barge-in patch does not safely interrupt active TTS",
+        errors,
+    )
+    for primitive in (
+        "_run_audio_scene",
+        "_run_overlay",
+        "_recover_media_timeline",
+        "rejoin_count",
+        "rejoin_frames",
+    ):
+        require(
+            primitive in tater_features,
+            f"Tater audio parity primitive is missing: {primitive}",
+            errors,
+        )
     require(
         '_OTA_PATH = Path("/data/software.swu")' in tater_features,
         "OTA is not staged at the path consumed by S420 recovery",
