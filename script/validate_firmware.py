@@ -7,6 +7,9 @@ import sys
 
 
 ROOT = Path(__file__).resolve().parents[1]
+RELEASE_WORKFLOW = ROOT / ".github/workflows/release-firmware.yml"
+RELEASE_HIGHLIGHTS = ROOT / "RELEASE_HIGHLIGHTS.md"
+RELEASE_NOTES_RENDERER = ROOT / "script/render_release_notes.py"
 DEFCONFIG = ROOT / "buildroot/configs/3reality_trspk_defconfig"
 PACKAGE_MK = ROOT / "buildroot/package/thirdreality/tater-linux-satellite/tater-linux-satellite.mk"
 PACKAGE_CONFIG = ROOT / "buildroot/package/thirdreality/tater-linux-satellite/Config.in"
@@ -38,9 +41,17 @@ TATER_BARGE_IN_PATCH = (
     ROOT
     / "buildroot/package/thirdreality/tater-linux-satellite/0007-enable-tater-tts-barge-in.patch"
 )
+TATER_WAKE_SOUND_PATCH = (
+    ROOT
+    / "buildroot/package/thirdreality/tater-linux-satellite/0008-follow-tater-wake-sound-settings.patch"
+)
 TATER_FEATURES = (
     ROOT
     / "buildroot/package/thirdreality/tater-linux-satellite/files/tater_features.py"
+)
+TATER_WAKE_SOUNDS = (
+    ROOT
+    / "buildroot/package/thirdreality/tater-linux-satellite/files/wake_sounds"
 )
 LAUNCHER = ROOT / "buildroot/package/thirdreality/tater-linux-satellite/files/tater-satellite-launcher"
 HARDWARE_BRIDGE = (
@@ -113,6 +124,9 @@ def require(condition: bool, message: str, errors: list[str]) -> None:
 
 def main() -> int:
     errors: list[str] = []
+    release_workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    release_highlights = RELEASE_HIGHLIGHTS.read_text(encoding="utf-8")
+    release_notes_renderer = RELEASE_NOTES_RENDERER.read_text(encoding="utf-8")
     defconfig = DEFCONFIG.read_text(encoding="utf-8")
     package_mk = PACKAGE_MK.read_text(encoding="utf-8")
     package_config = PACKAGE_CONFIG.read_text(encoding="utf-8")
@@ -123,6 +137,7 @@ def main() -> int:
     tater_no_frame_sender_patch = TATER_NO_FRAME_SENDER_PATCH.read_text(encoding="utf-8")
     tater_sync_player_patch = TATER_SYNC_PLAYER_PATCH.read_text(encoding="utf-8")
     tater_barge_in_patch = TATER_BARGE_IN_PATCH.read_text(encoding="utf-8")
+    tater_wake_sound_patch = TATER_WAKE_SOUND_PATCH.read_text(encoding="utf-8")
     tater_features = TATER_FEATURES.read_text(encoding="utf-8")
     launcher = LAUNCHER.read_text(encoding="utf-8")
     hardware_bridge = HARDWARE_BRIDGE.read_text(encoding="utf-8")
@@ -268,6 +283,8 @@ def main() -> int:
         "persistent_media_sessions",
         "tts_overlays",
         "barge_in",
+        "wake_sounds",
+        "custom_wake_sounds",
     ):
         require(f'"{capability}": True' in tater_features, f"Tater feature is missing: {capability}", errors)
     for capability in (
@@ -343,6 +360,50 @@ def main() -> int:
         "Tater barge-in patch does not safely interrupt active TTS",
         errors,
     )
+    require(
+        'getattr(self, "_tater_wakeup_sound", self.state.wakeup_sound)'
+        in tater_wake_sound_patch
+        and "self._on_wakeup_sound_finished(wake_word_phrase)" in tater_wake_sound_patch,
+        "Tater wake-sound patch does not honor the selected sound or silence setting",
+        errors,
+    )
+    require(
+        "files/wake_sounds/." in package_mk,
+        "Tater wake-sound assets are not installed into the Linux runtime",
+        errors,
+    )
+    for sound_file in (
+        "blip2.wav",
+        "message-notification-4.wav",
+        "notification-ding.wav",
+        "notification-squeak.wav",
+        "phone-chime.wav",
+        "pop-up-sound.wav",
+        "short-definite-fart.wav",
+        "star_treck_communications_start_transmission.wav",
+        "star_treck_computer_work_beep.wav",
+        "tater_notify_digital_blip.wav",
+        "turning-off-microphone-percussion-1.wav",
+        "wake_word_triggered.wav",
+        "waterdrop.wav",
+    ):
+        require(
+            (TATER_WAKE_SOUNDS / sound_file).is_file(),
+            f"Tater wake-sound asset is missing: {sound_file}",
+            errors,
+        )
+    for primitive in (
+        "_apply_wake_sound_selection",
+        "_download_custom_wake_sound",
+        "_cached_custom_wake_sound",
+        "wake_sound_enabled",
+        "wake_sound_url",
+    ):
+        require(
+            primitive in tater_features,
+            f"Tater wake-sound runtime primitive is missing: {primitive}",
+            errors,
+        )
     for primitive in (
         "_run_audio_scene",
         "_run_overlay",
@@ -408,6 +469,23 @@ def main() -> int:
     require(
         'export TATER_SWUPDATE_PRIVATE_KEY_FILE="${ROOT_DIR}/buildroot/board/thirdreality/common/ota/swu/swupdate-priv.pem"' in build_script,
         "build does not use the staged absolute signing-key path",
+        errors,
+    )
+    require(
+        "script/render_release_notes.py" in release_workflow
+        and '"$RELEASE_DIR/RELEASE_NOTES.md"' in release_workflow,
+        "release workflow does not render structured GitHub release notes",
+        errors,
+    )
+    require(
+        "## What's Changed" in release_notes_renderer
+        and "RELEASE_HIGHLIGHTS.md" in release_notes_renderer,
+        "release notes do not include the tracked What's Changed highlights",
+        errors,
+    )
+    require(
+        any(line.strip().startswith("- ") for line in release_highlights.splitlines()),
+        "release highlights do not contain any What's Changed entries",
         errors,
     )
     for label, text in ntp_files.items():

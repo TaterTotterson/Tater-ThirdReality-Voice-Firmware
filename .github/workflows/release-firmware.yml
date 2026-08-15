@@ -58,7 +58,10 @@ jobs:
             --release-dir "$RELEASE_DIR" \
             --release-repo "$GITHUB_REPOSITORY" \
             --release-tag "$GITHUB_REF_NAME"
-          printf 'Tater ThirdReality S420 firmware %s\n\nSee docs/FLASHING.md for first-install and recovery instructions.\n' "$VERSION" > "$RELEASE_DIR/RELEASE_NOTES.md"
+          RELEASE_MANIFEST="$(ls "$RELEASE_DIR"/*-manifest.json | head -n 1)"
+          python3 script/render_release_notes.py \
+            "$RELEASE_MANIFEST" \
+            "$RELEASE_DIR/RELEASE_NOTES.md"
           echo "RELEASE_DIR=$RELEASE_DIR" >> "$GITHUB_ENV"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
 

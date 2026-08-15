@@ -17,7 +17,8 @@ use `--update` to advance the pin and then rerun CI and hardware tests.
 | Signed SWUpdate artifacts | Ready | Build-time external signing key and embedded public key |
 | Native Tater timer control | Ready | Up to eight local timers; start, list, cancel, snooze, alarm, and stop-word ringing control |
 | Native Tater OTA command | Ready | Authenticated URL command, local download, mandatory SWUpdate signature verification, and reboot |
-| Remote Tater settings UI | Ready (S420 subset) | Live volume, mute, wake model/threshold, wake engine, continued chat, TTS barge-in, LED theme, and logging level |
+| Remote Tater settings UI | Ready (S420 subset) | Live volume, mute, wake model/threshold, wake engine, built-in or custom cached wake sounds, continued chat, TTS barge-in, LED theme, and logging level |
+| Tater wake-sound catalog | Implemented; hardware validation pending | The Wake Sound switch, No Sound, default chime, all embedded Tater choices, and checksum-bound custom WAV cache control the acknowledgement before microphone streaming |
 | Tater setup/reset command | Ready | Clears Wi-Fi and pairing, then reboots into `Tater-Setup-XXXX` |
 | Production-owned secure boot | Platform constraint | SWUpdate is rekeyed, but the proprietary Amlogic boot-FIP root remains owned by ThirdReality |
 | Barge-in while TTS is playing | Implemented; hardware validation pending | Disabled by default; when enabled in Tater, a wake word cancels active TTS without opening a second pipeline during other states |

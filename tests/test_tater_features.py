@@ -155,6 +155,7 @@ class _State:
         self.wake_words_changed = False
         self.volume = 0.8
         self.saved = 0
+        self.wakeup_sound = "/factory/wake_word_triggered.flac"
 
     def persist_volume(self, value):
         self.volume = value
@@ -202,8 +203,14 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.original_settings_path = tater_features._SETTINGS_PATH
         self.original_ota_path = tater_features._OTA_PATH
+        self.original_wake_sound_dir = tater_features._TATER_WAKE_SOUND_DIR
         tater_features._SETTINGS_PATH = Path(self.temporary.name) / "settings.json"
         tater_features._OTA_PATH = Path(self.temporary.name) / "software.swu"
+        tater_features._TATER_WAKE_SOUND_DIR = Path(self.temporary.name) / "wake_sounds"
+        tater_features._TATER_WAKE_SOUND_DIR.mkdir()
+        (tater_features._TATER_WAKE_SOUND_DIR / "blip2.wav").write_bytes(
+            b"RIFF\x04\x00\x00\x00WAVE"
+        )
         self.client = _Client()
         self.manager = tater_features.TaterFeatureManager(self.client)
 
@@ -211,6 +218,7 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
         await self.manager.close()
         tater_features._SETTINGS_PATH = self.original_settings_path
         tater_features._OTA_PATH = self.original_ota_path
+        tater_features._TATER_WAKE_SOUND_DIR = self.original_wake_sound_dir
         self.temporary.cleanup()
 
     def _messages(self, message_type):
@@ -294,6 +302,82 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(self.client.state.wake_word_1_threshold, 0.97)
         self.assertNotIn("wake_threshold", self.manager.settings)
         self.assertNotIn("wake_engine", self.manager.settings)
+
+    async def test_wake_sound_settings_select_embedded_default_and_silence(self) -> None:
+        self.manager.handle_message(
+            {
+                "type": "settings",
+                "payload": {"wake_sound_enabled": True, "wake_sound": "blip2"},
+            }
+        )
+        self.assertEqual(
+            self.client.satellite._tater_wakeup_sound,
+            str(tater_features._TATER_WAKE_SOUND_DIR / "blip2.wav"),
+        )
+
+        self.manager.handle_message(
+            {
+                "type": "settings",
+                "payload": {"wake_sound_enabled": True, "wake_sound": "default"},
+            }
+        )
+        self.assertEqual(
+            self.client.satellite._tater_wakeup_sound,
+            self.client.state.wakeup_sound,
+        )
+
+        self.manager.handle_message(
+            {
+                "type": "settings",
+                "payload": {"wake_sound_enabled": False, "wake_sound": "default"},
+            }
+        )
+        self.assertEqual(self.client.satellite._tater_wakeup_sound, "")
+        persisted = json.loads(tater_features._SETTINGS_PATH.read_text(encoding="utf-8"))
+        self.assertFalse(persisted["wake_sound_enabled"])
+        self.assertEqual(persisted["wake_sound"], "default")
+
+    async def test_custom_wake_sound_downloads_caches_and_activates_live(self) -> None:
+        custom_path = Path(self.temporary.name) / "tater-wake-sound.wav"
+        custom_path.write_bytes(b"RIFF\x04\x00\x00\x00WAVE")
+        with mock.patch.object(
+            tater_features,
+            "_download_custom_wake_sound",
+            return_value=custom_path,
+        ) as download:
+            self.manager.handle_message(
+                {
+                    "type": "settings",
+                    "payload": {
+                        "wake_sound_enabled": True,
+                        "wake_sound": "custom",
+                        "wake_sound_url": "https://tater.test/wake.wav",
+                    },
+                }
+            )
+            await asyncio.wait_for(self.manager.wake_sound_task, timeout=1)
+
+        download.assert_called_once_with("https://tater.test/wake.wav")
+        self.assertEqual(self.client.satellite._tater_wakeup_sound, str(custom_path))
+        self.assertFalse(self.manager.wake_sound_downloading)
+        self.assertIn("ready", self._messages("log")[-1]["payload"]["message"].lower())
+
+    async def test_custom_wake_sound_cache_requires_matching_url_and_digest(self) -> None:
+        url = "https://tater.test/wake.wav"
+        data = b"RIFF\x04\x00\x00\x00WAVE"
+        sound_path = tater_features._wake_sound_cache_path()
+        metadata_path = tater_features._wake_sound_cache_metadata_path()
+        sound_path.write_bytes(data)
+        metadata_path.write_text(
+            json.dumps({"url": url, "sha256": hashlib.sha256(data).hexdigest()}),
+            encoding="utf-8",
+        )
+        self.assertEqual(tater_features._cached_custom_wake_sound(url), sound_path)
+        self.assertIsNone(
+            tater_features._cached_custom_wake_sound("https://tater.test/other.wav")
+        )
+        sound_path.write_bytes(data + b"changed")
+        self.assertIsNone(tater_features._cached_custom_wake_sound(url))
 
     async def test_installed_wake_word_is_loaded_and_activated(self) -> None:
         self.client.state.active_wake_words.clear()

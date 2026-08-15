@@ -46,6 +46,8 @@ define TATER_LINUX_SATELLITE_INSTALL_RESOURCES
 	mkdir -p $(TATER_LINUX_SATELLITE_PYTHON_SITE)/sounds
 	cp -a $(@D)/wakewords/. $(TATER_LINUX_SATELLITE_PYTHON_SITE)/wakewords/
 	cp -a $(@D)/sounds/. $(TATER_LINUX_SATELLITE_PYTHON_SITE)/sounds/
+	cp -a $(TATER_LINUX_SATELLITE_PKGDIR)/files/wake_sounds/. \
+		$(TATER_LINUX_SATELLITE_PYTHON_SITE)/sounds/
 	$(INSTALL) -D -m 0644 $(TATER_LINUX_SATELLITE_PKGDIR)/files/wakewords/hey_tater.json \
 		$(TATER_LINUX_SATELLITE_PYTHON_SITE)/wakewords/hey_tater.json
 	$(INSTALL) -D -m 0644 $(TATER_LINUX_SATELLITE_PKGDIR)/files/wakewords/hey_tater.tflite \

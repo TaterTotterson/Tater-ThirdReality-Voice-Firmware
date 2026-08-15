@@ -1,0 +1,37 @@
+From 3adf6c4741efc85486955a44f0d6e980cd59c84c Mon Sep 17 00:00:00 2001
+From: Tater Firmware <firmware@tater.local>
+Date: Sat, 15 Aug 2026 12:00:00 -0500
+Subject: [PATCH] follow Tater wake sound settings
+
+Let the Tater feature manager select the wake acknowledgement file. An empty
+selection intentionally skips playback and opens the microphone immediately,
+which makes the global Wake Sound switch and No Sound choice effective.
+---
+ linux_voice_assistant/satellite.py | 12 ++++++++----
+ 1 file changed, 8 insertions(+), 4 deletions(-)
+
+diff --git a/linux_voice_assistant/satellite.py b/linux_voice_assistant/satellite.py
+index 9b705d7..46ae1c3 100644
+--- a/linux_voice_assistant/satellite.py
++++ b/linux_voice_assistant/satellite.py
+@@ -995,10 +995,14 @@ class Satellite:
+         self._pipeline_active = True
+         self._emit(LVAEvent.WAKE_WORD_DETECTED)
+         self.duck()
+-        self.state.tts_player.play(
+-            self.state.wakeup_sound,
+-            done_callback=lambda: self._on_wakeup_sound_finished(wake_word_phrase),
+-        )
++        wakeup_sound = getattr(self, "_tater_wakeup_sound", self.state.wakeup_sound)
++        if wakeup_sound:
++            self.state.tts_player.play(
++                wakeup_sound,
++                done_callback=lambda: self._on_wakeup_sound_finished(wake_word_phrase),
++            )
++        else:
++            self._on_wakeup_sound_finished(wake_word_phrase)
+ 
+     def _on_wakeup_sound_finished(self, wake_word_phrase: str) -> None:
+         """Callback invoked when the wakeup chime finishes; begin STT streaming."""
+-- 
+2.50.1

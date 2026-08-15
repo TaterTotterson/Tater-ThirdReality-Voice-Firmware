@@ -30,9 +30,27 @@ _SWUPDATE_KEY = Path("/etc/swupdate-public.pem")
 _OTA_MAX_BYTES = 192 * 1024 * 1024
 _WAKE_MANIFEST_MAX_BYTES = 128 * 1024
 _WAKE_MODEL_MAX_BYTES = 2 * 1024 * 1024
+_WAKE_SOUND_MAX_BYTES = 2 * 1024 * 1024
 _WAKE_DOWNLOAD_TIMEOUT_SECONDS = 30
 _WAKE_URL_SCHEMES = {"http", "https"}
 _WAKE_SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
+_TATER_WAKE_SOUND_DIR = Path(__file__).resolve().parents[1] / "sounds"
+_WAKE_SOUND_FILES = {
+    "blip2": "blip2.wav",
+    "message-notification-4": "message-notification-4.wav",
+    "notification-ding": "notification-ding.wav",
+    "notification-squeak": "notification-squeak.wav",
+    "phone-chime": "phone-chime.wav",
+    "pop-up-sound": "pop-up-sound.wav",
+    "short-definite-fart": "short-definite-fart.wav",
+    "star_treck_communications_start_transmission": "star_treck_communications_start_transmission.wav",
+    "star_treck_computer_work_beep": "star_treck_computer_work_beep.wav",
+    "tater_notify_digital_blip": "tater_notify_digital_blip.wav",
+    "turning-off-microphone-percussion-1": "turning-off-microphone-percussion-1.wav",
+    "wake_word_triggered": "wake_word_triggered.wav",
+    "waterdrop": "waterdrop.wav",
+}
+_WAKE_SOUND_IDS = {"default", "no_sound", "custom", *_WAKE_SOUND_FILES}
 _MEDIA_SAMPLE_RATE_HZ = 48000
 _MEDIA_PREPARE_TIMEOUT_SECONDS = 60.0
 _MEDIA_COMMIT_TIMEOUT_SECONDS = 30.0
@@ -245,6 +263,58 @@ def _download_custom_wake_package(state: Any, manifest_url: str) -> tuple[str, A
     return model_id, available, loaded
 
 
+def _wake_sound_cache_path() -> Path:
+    return _SETTINGS_PATH.with_name("tater-wake-sound.wav")
+
+
+def _wake_sound_cache_metadata_path() -> Path:
+    return _SETTINGS_PATH.with_name("tater-wake-sound.json")
+
+
+def _validate_wav(data: bytes) -> None:
+    if len(data) < 12 or data[:4] != b"RIFF" or data[8:12] != b"WAVE":
+        raise ValueError("custom wake sound is not a RIFF/WAVE file")
+
+
+def _cached_custom_wake_sound(url: str) -> Optional[Path]:
+    sound_path = _wake_sound_cache_path()
+    metadata_path = _wake_sound_cache_metadata_path()
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        if not isinstance(metadata, dict) or str(metadata.get("url") or "") != url:
+            return None
+        data = sound_path.read_bytes()
+        _validate_wav(data)
+        expected_sha256 = str(metadata.get("sha256") or "").strip().lower()
+        if not _WAKE_SHA256.fullmatch(expected_sha256):
+            return None
+        if hashlib.sha256(data).hexdigest() != expected_sha256:
+            return None
+        return sound_path
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def _download_custom_wake_sound(url: str) -> Path:
+    url = _validated_web_url(url, label="wake-sound URL")
+    data = _download_limited(url, _WAKE_SOUND_MAX_BYTES)
+    _validate_wav(data)
+    sound_path = _wake_sound_cache_path()
+    metadata_path = _wake_sound_cache_metadata_path()
+    sound_path.parent.mkdir(parents=True, exist_ok=True)
+    _write_bytes_atomic(sound_path, data)
+    metadata = {
+        "url": url,
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "size_bytes": len(data),
+    }
+    _write_bytes_atomic(
+        metadata_path,
+        (json.dumps(metadata, indent=2, sort_keys=True) + "\n").encode("utf-8"),
+    )
+    return sound_path
+
+
 @dataclass
 class _Timer:
     timer_id: str
@@ -385,13 +455,20 @@ class TaterFeatureManager:
         self.wake_model_task: Optional[asyncio.Task[None]] = None
         self.wake_model_generation = 0
         self.wake_model_downloading = False
+        self.wake_sound_task: Optional[asyncio.Task[None]] = None
+        self.wake_sound_generation = 0
+        self.wake_sound_downloading = False
+        self._default_wakeup_sound = str(getattr(self.state, "wakeup_sound", "") or "")
         self.settings = self._load_settings()
         self.satellite._tater_barge_in_enabled = _truthy(  # pylint: disable=protected-access
             self.settings.get("barge_in_enabled")
         )
+        self.satellite._tater_wakeup_sound = self._default_wakeup_sound  # pylint: disable=protected-access
         self.capabilities: dict[str, Any] = {
             "live_settings": True,
             "custom_wake_words": True,
+            "wake_sounds": True,
+            "custom_wake_sounds": True,
             "status_led": True,
             "setup_mode": True,
             "timers": True,
@@ -526,7 +603,9 @@ class TaterFeatureManager:
             "media_session_id": self.media_session_id,
             "ota_active": self.ota_task is not None and not self.ota_task.done(),
             "wake_model_downloading": self.wake_model_downloading,
+            "wake_sound_downloading": self.wake_sound_downloading,
             "wake_word": next(iter(self.state.active_wake_words), ""),
+            "wake_sound": str(self.settings.get("wake_sound") or "no_sound"),
             "data_free_bytes": disk_free,
         }
 
@@ -756,6 +835,16 @@ class TaterFeatureManager:
             wake_word_url = str(payload.get("wake_word_url") or "").strip()
             if len(wake_word_url) <= 2048:
                 applied["wake_word_url"] = wake_word_url
+        if "wake_sound_enabled" in payload:
+            applied["wake_sound_enabled"] = _truthy(payload.get("wake_sound_enabled"))
+        if "wake_sound" in payload:
+            wake_sound = str(payload.get("wake_sound") or "").strip().lower()
+            if wake_sound in _WAKE_SOUND_IDS:
+                applied["wake_sound"] = wake_sound
+        if "wake_sound_url" in payload:
+            wake_sound_url = str(payload.get("wake_sound_url") or "").strip()
+            if len(wake_sound_url) <= 2048:
+                applied["wake_sound_url"] = wake_sound_url
         if "continued_chat" in payload:
             applied["continued_chat"] = _truthy(payload.get("continued_chat"))
         if "barge_in_enabled" in payload:
@@ -786,6 +875,94 @@ class TaterFeatureManager:
                 self._save_settings()
         if {"wake_word", "wake_word_url", "wake_engine"}.intersection(payload):
             self._apply_wake_selection()
+        if not persist or {"wake_sound_enabled", "wake_sound", "wake_sound_url"}.intersection(payload):
+            self._apply_wake_sound_selection()
+
+    def _cancel_custom_wake_sound_download(self) -> None:
+        self.wake_sound_generation += 1
+        if self.wake_sound_task is not None and not self.wake_sound_task.done():
+            self.wake_sound_task.cancel()
+        self.wake_sound_task = None
+        self.wake_sound_downloading = False
+
+    def _apply_wake_sound_selection(self) -> None:
+        enabled = _truthy(self.settings.get("wake_sound_enabled"))
+        sound_id = str(self.settings.get("wake_sound") or "no_sound").strip().lower()
+        if sound_id not in _WAKE_SOUND_IDS:
+            sound_id = "no_sound"
+
+        if (not enabled) or sound_id == "no_sound":
+            self._cancel_custom_wake_sound_download()
+            self.satellite._tater_wakeup_sound = ""  # pylint: disable=protected-access
+            return
+
+        if sound_id == "default":
+            self._cancel_custom_wake_sound_download()
+            self.satellite._tater_wakeup_sound = self._default_wakeup_sound  # pylint: disable=protected-access
+            return
+
+        if sound_id in _WAKE_SOUND_FILES:
+            self._cancel_custom_wake_sound_download()
+            sound_path = _TATER_WAKE_SOUND_DIR / _WAKE_SOUND_FILES[sound_id]
+            if sound_path.is_file():
+                self.satellite._tater_wakeup_sound = str(sound_path)  # pylint: disable=protected-access
+            else:
+                self.satellite._tater_wakeup_sound = ""  # pylint: disable=protected-access
+                self._send(
+                    "log",
+                    {
+                        "level": "error",
+                        "message": f"Tater wake sound '{sound_id}' is missing from this firmware image.",
+                    },
+                )
+            return
+
+        custom_url = str(self.settings.get("wake_sound_url") or "").strip()
+        if not custom_url:
+            self._cancel_custom_wake_sound_download()
+            self.satellite._tater_wakeup_sound = ""  # pylint: disable=protected-access
+            self._send("log", {"level": "error", "message": "Custom wake sound selected without a WAV URL."})
+            return
+
+        try:
+            cached_path = _cached_custom_wake_sound(custom_url)
+        except Exception:  # pylint: disable=broad-except
+            cached_path = None
+        if cached_path is not None:
+            self._cancel_custom_wake_sound_download()
+            self.satellite._tater_wakeup_sound = str(cached_path)  # pylint: disable=protected-access
+            return
+
+        self._cancel_custom_wake_sound_download()
+        generation = self.wake_sound_generation
+        self.wake_sound_downloading = True
+        self.satellite._tater_wakeup_sound = ""  # pylint: disable=protected-access
+        self.wake_sound_task = asyncio.create_task(
+            self._activate_custom_wake_sound(custom_url, generation)
+        )
+
+    async def _activate_custom_wake_sound(self, custom_url: str, generation: int) -> None:
+        self._send("log", {"level": "info", "message": "Downloading the Tater custom wake sound."})
+        try:
+            sound_path = await asyncio.to_thread(_download_custom_wake_sound, custom_url)
+            if generation != self.wake_sound_generation:
+                return
+            if not _truthy(self.settings.get("wake_sound_enabled")):
+                return
+            if str(self.settings.get("wake_sound") or "") != "custom":
+                return
+            if str(self.settings.get("wake_sound_url") or "").strip() != custom_url:
+                return
+            self.satellite._tater_wakeup_sound = str(sound_path)  # pylint: disable=protected-access
+            self._send("log", {"level": "info", "message": "The Tater custom wake sound is ready."})
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # pylint: disable=broad-except
+            _LOGGER.exception("Unable to install custom wake sound")
+            self._send("log", {"level": "error", "message": f"Custom wake-sound download failed: {exc}"})
+        finally:
+            if generation == self.wake_sound_generation:
+                self.wake_sound_downloading = False
 
     def _activate_wake_word(
         self,
@@ -1822,5 +1999,11 @@ class TaterFeatureManager:
             self.wake_model_task.cancel()
             try:
                 await self.wake_model_task
+            except asyncio.CancelledError:
+                pass
+        if self.wake_sound_task is not None and not self.wake_sound_task.done():
+            self.wake_sound_task.cancel()
+            try:
+                await self.wake_sound_task
             except asyncio.CancelledError:
                 pass

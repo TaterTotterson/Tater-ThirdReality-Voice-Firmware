@@ -1,0 +1,4 @@
+- Makes ThirdReality S420 satellites follow Tater's Wake Sound switch and selected acknowledgement instead of always playing the factory default.
+- Embeds the complete Tater wake-sound catalog in the firmware so built-in choices work without a network download.
+- Supports the original S420 default chime and a true No Sound mode that opens the microphone immediately.
+- Downloads custom WAV wake sounds once and reuses them from a URL- and checksum-bound local cache.
