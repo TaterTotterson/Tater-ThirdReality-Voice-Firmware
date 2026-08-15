@@ -24,7 +24,11 @@ Build-time source and dependency downloads are not device runtime traffic.
   preconfigured Tater server destination. Once paired, the authenticated
   WebSocket hello reports the device ID, friendly name, board, firmware version,
   room, and capabilities. Microphone audio is sent only after a local wake or
-  press-to-talk event starts a voice session.
+  press-to-talk event starts a voice session. When STT wake verification is set
+  to observe or enforce, a local wake also sends only the configured 0.5–2
+  second rolling PCM wake window over that authenticated connection. The
+  verifier is off by default; enforce mode fails open if Tater cannot return a
+  verdict within the configured timeout.
 - The authenticated Tater session can provide TTS/media URLs, external wake
   word model URLs, custom wake-sound URLs, and signed firmware URLs. The device
   fetches these only as part of an authenticated command or configuration from

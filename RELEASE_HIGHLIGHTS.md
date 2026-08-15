@@ -1,4 +1,4 @@
-- Makes ThirdReality S420 satellites follow Tater's Wake Sound switch and selected acknowledgement instead of always playing the factory default.
-- Embeds the complete Tater wake-sound catalog in the firmware so built-in choices work without a network download.
-- Supports the original S420 default chime and a true No Sound mode that opens the microphone immediately.
-- Downloads custom WAV wake sounds once and reuses them from a URL- and checksum-bound local cache.
+- Adds Tater STT wake verification to ThirdReality S420 satellites using the same authenticated `TWV1` contract as the ESP satellite family.
+- Supports Off, Observe, and Enforce modes with Tater-controlled capture-window and timeout settings.
+- Lets Enforce mode reject false wakes while safely failing open if verification is unavailable, times out, or the Tater connection drops.
+- Reports verifier readiness and statistics to Tater so S420 devices no longer appear as **No verifier firmware**.

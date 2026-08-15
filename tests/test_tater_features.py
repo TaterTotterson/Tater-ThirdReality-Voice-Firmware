@@ -5,6 +5,7 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import struct
 import sys
 import tempfile
 import types
@@ -153,6 +154,7 @@ class _State:
         self.preferences = _Preferences()
         self.wake_word_1_threshold = 0.97
         self.wake_words_changed = False
+        self.muted = False
         self.volume = 0.8
         self.saved = 0
         self.wakeup_sound = "/factory/wake_word_triggered.flac"
@@ -171,6 +173,7 @@ class _Satellite:
         self._timer_ring_start = None
         self.events = []
         self.muted = False
+        self.verified_wakes = []
 
     def _emit(self, event, data=None):
         self.events.append((event, data))
@@ -186,6 +189,10 @@ class _Satellite:
 
     def _set_muted(self, value):
         self.muted = value
+        self.state.muted = value
+
+    def _tater_start_verified_wake(self, wake_word_phrase):
+        self.verified_wakes.append(wake_word_phrase)
 
 
 class _Client:
@@ -193,9 +200,15 @@ class _Client:
         self.state = _State()
         self.satellite = _Satellite(self.state)
         self.frames = []
+        self.binary_frames = []
+        self.connected = True
+        self._loop = None
 
     def _submit_frame(self, frame):
-        self.frames.append(json.loads(frame))
+        if isinstance(frame, (bytes, bytearray)):
+            self.binary_frames.append(bytes(frame))
+        else:
+            self.frames.append(json.loads(frame))
 
 
 class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
@@ -212,6 +225,7 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
             b"RIFF\x04\x00\x00\x00WAVE"
         )
         self.client = _Client()
+        self.client._loop = asyncio.get_running_loop()
         self.manager = tater_features.TaterFeatureManager(self.client)
 
     async def asyncTearDown(self) -> None:
@@ -241,6 +255,7 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.manager.capabilities["audio_scenes"])
         self.assertTrue(self.manager.capabilities["looping_background_audio"])
         self.assertTrue(self.manager.capabilities["barge_in"])
+        self.assertTrue(self.manager.capabilities["wake_verifier"])
         self.assertEqual(self.manager.capabilities["media_output_latency_frames"], 6144)
         self.assertEqual(self.manager.capabilities["audio_session_version"], 2)
         self.assertEqual(self.manager.capabilities["audio_scene_version"], 1)
@@ -291,6 +306,137 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(persisted["volume_percent"], 42)
         self.assertTrue(persisted["barge_in_enabled"])
         self.assertTrue(self.client.satellite._tater_barge_in_enabled)
+
+    async def test_wake_verifier_settings_are_validated_and_reported(self) -> None:
+        self.manager.handle_message(
+            {
+                "type": "settings",
+                "payload": {
+                    "wake_verifier_mode": "enforce",
+                    "wake_verifier_window_ms": 9999,
+                    "wake_verifier_timeout_ms": 1,
+                },
+            }
+        )
+        self.assertEqual(self.manager.settings["wake_verifier_mode"], "enforce")
+        self.assertEqual(self.manager.settings["wake_verifier_window_ms"], 2000)
+        self.assertEqual(self.manager.settings["wake_verifier_timeout_ms"], 100)
+        verifier = self.manager.status()["wake_engine"]["verifier"]
+        self.assertFalse(verifier["pending"])
+        self.assertEqual(verifier["completed"], 0)
+
+    async def test_wake_verifier_observe_uploads_twv1_without_deferring(self) -> None:
+        self.manager.handle_message(
+            {
+                "type": "settings",
+                "payload": {
+                    "wake_verifier_mode": "observe",
+                    "wake_verifier_window_ms": 500,
+                },
+            }
+        )
+        self.manager.capture_wake_verifier_audio(b"\x01\x00" * 16000)
+
+        self.assertFalse(self.manager.begin_wake_verification("Hey Tater"))
+        self.assertEqual(len(self.client.binary_frames), 1)
+        packet = self.client.binary_frames[-1]
+        header = struct.Struct("<4sBBHIII")
+        magic, version, codec, flags, request_id, sample_rate, sample_count = header.unpack_from(packet)
+        self.assertEqual((magic, version, codec, flags), (b"TWV1", 1, 1, 0))
+        self.assertGreater(request_id, 0)
+        self.assertEqual(sample_rate, 16000)
+        self.assertEqual(sample_count, 8000)
+        self.assertEqual(len(packet) - header.size, sample_count * 2)
+
+        self.assertTrue(
+            self.manager.handle_message(
+                {
+                    "type": "wake.verify.result",
+                    "payload": {
+                        "request_id": request_id,
+                        "accepted": False,
+                        "available": True,
+                        "reason": "wake phrase not present",
+                    },
+                }
+            )
+        )
+        verifier = self.manager.status()["wake_engine"]["verifier"]
+        self.assertEqual(verifier["completed"], 1)
+        self.assertEqual(verifier["rejections"], 1)
+        self.assertFalse(self.client.satellite.verified_wakes)
+
+    async def test_wake_verifier_enforce_waits_for_acceptance(self) -> None:
+        self.manager.handle_message(
+            {
+                "type": "settings",
+                "payload": {
+                    "wake_verifier_mode": "enforce",
+                    "wake_verifier_timeout_ms": 1000,
+                },
+            }
+        )
+        self.manager.capture_wake_verifier_audio(b"\x02\x00" * 16000)
+
+        self.assertTrue(self.manager.begin_wake_verification("Hey Tater"))
+        await asyncio.sleep(0)
+        packet = self.client.binary_frames[-1]
+        request_id = struct.Struct("<4sBBHIII").unpack_from(packet)[4]
+        self.assertEqual(struct.Struct("<4sBBHIII").unpack_from(packet)[3], 1)
+        self.assertTrue(self.manager.status()["wake_engine"]["verifier"]["pending"])
+        self.assertFalse(self.client.satellite.verified_wakes)
+
+        self.manager.handle_message(
+            {
+                "type": "wake.verify.result",
+                "payload": {
+                    "request_id": request_id,
+                    "accepted": True,
+                    "available": True,
+                    "reason": "accepted",
+                },
+            }
+        )
+        self.assertEqual(self.client.satellite.verified_wakes, ["Hey Tater"])
+        verifier = self.manager.status()["wake_engine"]["verifier"]
+        self.assertFalse(verifier["pending"])
+        self.assertEqual(verifier["completed"], 1)
+
+    async def test_wake_verifier_enforce_rejects_and_timeout_fails_open(self) -> None:
+        self.manager.handle_message(
+            {
+                "type": "settings",
+                "payload": {
+                    "wake_verifier_mode": "enforce",
+                    "wake_verifier_timeout_ms": 100,
+                },
+            }
+        )
+        self.manager.capture_wake_verifier_audio(b"\x03\x00" * 16000)
+        self.assertTrue(self.manager.begin_wake_verification("Hey Tater"))
+        await asyncio.sleep(0)
+        request_id = struct.Struct("<4sBBHIII").unpack_from(self.client.binary_frames[-1])[4]
+        self.manager.handle_message(
+            {
+                "type": "wake.verify.result",
+                "payload": {
+                    "request_id": request_id,
+                    "accepted": False,
+                    "available": True,
+                    "reason": "rejected",
+                },
+            }
+        )
+        self.assertFalse(self.client.satellite.verified_wakes)
+        self.assertEqual(self.manager.status()["wake_engine"]["verifier"]["rejections"], 1)
+
+        self.manager.capture_wake_verifier_audio(b"\x04\x00" * 16000)
+        self.assertTrue(self.manager.begin_wake_verification("Hey Tater"))
+        await asyncio.sleep(0.15)
+        self.assertEqual(self.client.satellite.verified_wakes, ["Hey Tater"])
+        verifier = self.manager.status()["wake_engine"]["verifier"]
+        self.assertEqual(verifier["completed"], 2)
+        self.assertEqual(verifier["fail_open"], 1)
 
     async def test_invalid_settings_do_not_break_the_native_session(self) -> None:
         self.manager.handle_message(

@@ -45,6 +45,10 @@ TATER_WAKE_SOUND_PATCH = (
     ROOT
     / "buildroot/package/thirdreality/tater-linux-satellite/0008-follow-tater-wake-sound-settings.patch"
 )
+TATER_WAKE_VERIFIER_PATCH = (
+    ROOT
+    / "buildroot/package/thirdreality/tater-linux-satellite/0009-add-tater-stt-wake-verifier.patch"
+)
 TATER_FEATURES = (
     ROOT
     / "buildroot/package/thirdreality/tater-linux-satellite/files/tater_features.py"
@@ -138,6 +142,7 @@ def main() -> int:
     tater_sync_player_patch = TATER_SYNC_PLAYER_PATCH.read_text(encoding="utf-8")
     tater_barge_in_patch = TATER_BARGE_IN_PATCH.read_text(encoding="utf-8")
     tater_wake_sound_patch = TATER_WAKE_SOUND_PATCH.read_text(encoding="utf-8")
+    tater_wake_verifier_patch = TATER_WAKE_VERIFIER_PATCH.read_text(encoding="utf-8")
     tater_features = TATER_FEATURES.read_text(encoding="utf-8")
     launcher = LAUNCHER.read_text(encoding="utf-8")
     hardware_bridge = HARDWARE_BRIDGE.read_text(encoding="utf-8")
@@ -285,6 +290,7 @@ def main() -> int:
         "barge_in",
         "wake_sounds",
         "custom_wake_sounds",
+        "wake_verifier",
     ):
         require(f'"{capability}": True' in tater_features, f"Tater feature is missing: {capability}", errors)
     for capability in (
@@ -367,6 +373,30 @@ def main() -> int:
         "Tater wake-sound patch does not honor the selected sound or silence setting",
         errors,
     )
+    for primitive in (
+        "capture_wake_verifier_audio",
+        "begin_wake_verification",
+        "_tater_start_verified_wake",
+    ):
+        require(
+            primitive in tater_wake_verifier_patch,
+            f"Tater wake-verifier runtime hook is missing: {primitive}",
+            errors,
+        )
+    for primitive in (
+        'struct.Struct("<4sBBHIII")',
+        'b"TWV1"',
+        "wake.verify.result",
+        "wake_verifier_mode",
+        "wake_verifier_window_ms",
+        "wake_verifier_timeout_ms",
+        '"wake_engine": {"verifier": self._wake_verifier_status()}',
+    ):
+        require(
+            primitive in tater_features,
+            f"Tater STT wake-verifier primitive is missing: {primitive}",
+            errors,
+        )
     require(
         "files/wake_sounds/." in package_mk,
         "Tater wake-sound assets are not installed into the Linux runtime",

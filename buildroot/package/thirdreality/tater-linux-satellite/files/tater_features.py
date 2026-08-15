@@ -9,7 +9,9 @@ import logging
 import os
 import re
 import shutil
+import struct
 import subprocess
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -51,6 +53,9 @@ _WAKE_SOUND_FILES = {
     "waterdrop": "waterdrop.wav",
 }
 _WAKE_SOUND_IDS = {"default", "no_sound", "custom", *_WAKE_SOUND_FILES}
+_WAKE_VERIFIER_PACKET = struct.Struct("<4sBBHIII")
+_WAKE_VERIFIER_MAX_SAMPLES = 16000 * 2
+_WAKE_VERIFIER_MODES = {"off", "observe", "enforce"}
 _MEDIA_SAMPLE_RATE_HZ = 48000
 _MEDIA_PREPARE_TIMEOUT_SECONDS = 60.0
 _MEDIA_COMMIT_TIMEOUT_SECONDS = 30.0
@@ -458,17 +463,32 @@ class TaterFeatureManager:
         self.wake_sound_task: Optional[asyncio.Task[None]] = None
         self.wake_sound_generation = 0
         self.wake_sound_downloading = False
+        self.wake_verifier_timeout_task: Optional[asyncio.Task[None]] = None
+        self._wake_audio_lock = threading.Lock()
+        self._wake_audio = bytearray()
+        self._wake_verifier_lock = threading.Lock()
+        self._wake_verifier_generation = 0
+        self._wake_verifier_last_id = 0
+        self._wake_verifier_completed_id = 0
+        self._wake_verifier_pending_id = 0
+        self._wake_verifier_pending_word = ""
+        self._wake_verifier_count = 0
+        self._wake_verifier_rejections = 0
+        self._wake_verifier_fail_open = 0
+        self._wake_verifier_last_reason = ""
         self._default_wakeup_sound = str(getattr(self.state, "wakeup_sound", "") or "")
         self.settings = self._load_settings()
         self.satellite._tater_barge_in_enabled = _truthy(  # pylint: disable=protected-access
             self.settings.get("barge_in_enabled")
         )
         self.satellite._tater_wakeup_sound = self._default_wakeup_sound  # pylint: disable=protected-access
+        self.satellite._tater_features = self  # pylint: disable=protected-access
         self.capabilities: dict[str, Any] = {
             "live_settings": True,
             "custom_wake_words": True,
             "wake_sounds": True,
             "custom_wake_sounds": True,
+            "wake_verifier": True,
             "status_led": True,
             "setup_mode": True,
             "timers": True,
@@ -510,6 +530,208 @@ class TaterFeatureManager:
             asyncio.get_running_loop().call_soon(callback, *args)
         except RuntimeError:
             callback(*args)
+
+    def capture_wake_verifier_audio(self, pcm: bytes) -> None:
+        """Keep the latest two seconds of primary-microphone PCM16 audio."""
+        mode = str(self.settings.get("wake_verifier_mode") or "off").strip().lower()
+        if mode not in {"observe", "enforce"}:
+            return
+        raw = bytes(pcm or b"")
+        if len(raw) < 2:
+            return
+        if len(raw) % 2:
+            raw = raw[:-1]
+        maximum_bytes = _WAKE_VERIFIER_MAX_SAMPLES * 2
+        with self._wake_audio_lock:
+            self._wake_audio.extend(raw)
+            overflow = len(self._wake_audio) - maximum_bytes
+            if overflow > 0:
+                del self._wake_audio[:overflow]
+
+    def _wake_verifier_audio_tail(self, window_ms: int) -> bytes:
+        requested_samples = _integer(
+            (16000 * window_ms) / 1000,
+            16000,
+            minimum=1,
+            maximum=_WAKE_VERIFIER_MAX_SAMPLES,
+        )
+        requested_bytes = requested_samples * 2
+        with self._wake_audio_lock:
+            return bytes(self._wake_audio[-requested_bytes:])
+
+    def _wake_verifier_status(self) -> dict[str, Any]:
+        with self._wake_verifier_lock:
+            return {
+                "pending": bool(self._wake_verifier_pending_id),
+                "pending_id": self._wake_verifier_pending_id,
+                "completed": self._wake_verifier_count,
+                "rejections": self._wake_verifier_rejections,
+                "fail_open": self._wake_verifier_fail_open,
+                "last_reason": self._wake_verifier_last_reason,
+            }
+
+    def begin_wake_verification(self, wake_word: str) -> bool:
+        """Upload a TWV1 wake clip; return True while enforcement defers STT."""
+        mode = str(self.settings.get("wake_verifier_mode") or "off").strip().lower()
+        if mode not in {"observe", "enforce"}:
+            return False
+        enforce = mode == "enforce"
+        with self._wake_verifier_lock:
+            if self._wake_verifier_pending_id:
+                return True
+
+        loop = getattr(self.client, "_loop", None)
+        connected = bool(getattr(self.client, "connected", False))
+        if loop is None or loop.is_closed() or not connected:
+            return False
+        window_ms = _integer(
+            self.settings.get("wake_verifier_window_ms"),
+            1000,
+            minimum=500,
+            maximum=2000,
+        )
+        pcm = self._wake_verifier_audio_tail(window_ms)
+        sample_count = len(pcm) // 2
+        if sample_count < 1:
+            self._send("log", {"level": "warn", "message": "Wake verifier skipped because its microphone buffer is empty."})
+            return False
+
+        with self._wake_verifier_lock:
+            self._wake_verifier_generation = (self._wake_verifier_generation + 1) & 0xFFFFFFFF
+            if self._wake_verifier_generation == 0:
+                self._wake_verifier_generation = 1
+            request_id = self._wake_verifier_generation
+            self._wake_verifier_last_id = request_id
+            self._wake_verifier_completed_id = 0
+            self._wake_verifier_last_reason = "pending"
+            if enforce:
+                self._wake_verifier_pending_id = request_id
+                self._wake_verifier_pending_word = str(wake_word or "")[:120]
+
+        flags = 0x01 if enforce else 0
+        packet = _WAKE_VERIFIER_PACKET.pack(
+            b"TWV1",
+            1,
+            1,
+            flags,
+            request_id,
+            16000,
+            sample_count,
+        ) + pcm
+        try:
+            self.client._submit_frame(packet)  # pylint: disable=protected-access
+        except Exception:  # pylint: disable=broad-except
+            _LOGGER.exception("Unable to upload a Tater wake-verifier clip")
+            if enforce:
+                self._complete_wake_verification(
+                    request_id,
+                    accepted=True,
+                    available=False,
+                    reason="upload_fail_open",
+                )
+            return False
+        if enforce:
+            timeout_ms = _integer(
+                self.settings.get("wake_verifier_timeout_ms"),
+                500,
+                minimum=100,
+                maximum=2000,
+            )
+            loop.call_soon_threadsafe(
+                self._arm_wake_verifier_timeout,
+                request_id,
+                timeout_ms,
+            )
+        return enforce
+
+    def _arm_wake_verifier_timeout(self, request_id: int, timeout_ms: int) -> None:
+        with self._wake_verifier_lock:
+            active = (
+                request_id == self._wake_verifier_pending_id
+                and request_id != self._wake_verifier_completed_id
+            )
+        if not active:
+            return
+        if self.wake_verifier_timeout_task is not None and not self.wake_verifier_timeout_task.done():
+            self.wake_verifier_timeout_task.cancel()
+        self.wake_verifier_timeout_task = asyncio.create_task(
+            self._wake_verifier_timeout(request_id, timeout_ms)
+        )
+
+    async def _wake_verifier_timeout(self, request_id: int, timeout_ms: int) -> None:
+        try:
+            await asyncio.sleep(timeout_ms / 1000.0)
+            self._complete_wake_verification(
+                request_id,
+                accepted=True,
+                available=False,
+                reason="satellite_timeout_fail_open",
+            )
+        except asyncio.CancelledError:
+            raise
+
+    def _complete_wake_verification(
+        self,
+        request_id: int,
+        *,
+        accepted: bool,
+        available: bool,
+        reason: str,
+    ) -> None:
+        wake_word = ""
+        enforced = False
+        should_start = False
+        with self._wake_verifier_lock:
+            if (
+                request_id == 0
+                or request_id != self._wake_verifier_last_id
+                or request_id == self._wake_verifier_completed_id
+            ):
+                return
+            self._wake_verifier_completed_id = request_id
+            self._wake_verifier_count += 1
+            fail_open = not available
+            if (not accepted) and available:
+                self._wake_verifier_rejections += 1
+            if fail_open:
+                self._wake_verifier_fail_open += 1
+            self._wake_verifier_last_reason = str(reason or ("accepted" if accepted else "rejected"))[:120]
+            if request_id == self._wake_verifier_pending_id:
+                enforced = True
+                should_start = accepted or fail_open
+                wake_word = self._wake_verifier_pending_word
+                self._wake_verifier_pending_id = 0
+                self._wake_verifier_pending_word = ""
+
+        try:
+            current = asyncio.current_task()
+        except RuntimeError:
+            current = None
+        timeout_task = self.wake_verifier_timeout_task
+        if timeout_task is not None and timeout_task is not current and not timeout_task.done():
+            timeout_task.cancel()
+        if timeout_task is not current:
+            self.wake_verifier_timeout_task = None
+        if not enforced:
+            return
+        if should_start:
+            self._send("log", {"level": "info", "message": "Wake verifier accepted the wake." if available else "Wake verifier timed out; continuing fail-open."})
+            start_verified = getattr(self.satellite, "_tater_start_verified_wake", None)
+            if callable(start_verified):
+                start_verified(wake_word)
+        else:
+            self._send("log", {"level": "info", "message": "Wake verifier rejected a false wake."})
+
+    def _fail_open_pending_wake_verification(self, reason: str) -> None:
+        with self._wake_verifier_lock:
+            request_id = self._wake_verifier_pending_id
+        if request_id:
+            self._complete_wake_verification(
+                request_id,
+                accepted=True,
+                available=False,
+                reason=reason,
+            )
 
     async def _sleep_until_us(self, deadline_us: int) -> None:
         while deadline_us > 0:
@@ -583,6 +805,7 @@ class TaterFeatureManager:
     def disconnected(self) -> None:
         # Timers intentionally remain local and keep counting during a server
         # reconnect. Media is stopped because its remote session is gone.
+        self._fail_open_pending_wake_verification("disconnect_fail_open")
         if self.audio_scene is not None:
             self._stop_audio_scene(ok=False, notify=False)
         if self.overlay_session is not None:
@@ -606,6 +829,7 @@ class TaterFeatureManager:
             "wake_sound_downloading": self.wake_sound_downloading,
             "wake_word": next(iter(self.state.active_wake_words), ""),
             "wake_sound": str(self.settings.get("wake_sound") or "no_sound"),
+            "wake_engine": {"verifier": self._wake_verifier_status()},
             "data_free_bytes": disk_free,
         }
 
@@ -615,6 +839,14 @@ class TaterFeatureManager:
         raw_payload = body.get("payload")
         payload = raw_payload if isinstance(raw_payload, dict) else {}
 
+        if message_type == "wake.verify.result":
+            self._complete_wake_verification(
+                _integer(payload.get("request_id"), maximum=0xFFFFFFFF),
+                accepted=_truthy(payload.get("accepted")),
+                available=_truthy(payload.get("available")),
+                reason=str(payload.get("reason") or "")[:120],
+            )
+            return True
         if message_type in {"timer.start", "timer.arm"}:
             self._start_timer(payload, message_id, replace=message_type == "timer.arm")
             return True
@@ -812,6 +1044,9 @@ class TaterFeatureManager:
             muted = _truthy(payload.get("muted"))
             self.satellite._set_muted(muted)  # pylint: disable=protected-access
             applied["muted"] = muted
+            if muted:
+                with self._wake_audio_lock:
+                    self._wake_audio.clear()
         if "wake_threshold" in payload:
             try:
                 threshold = float(payload.get("wake_threshold"))
@@ -849,6 +1084,24 @@ class TaterFeatureManager:
             applied["continued_chat"] = _truthy(payload.get("continued_chat"))
         if "barge_in_enabled" in payload:
             applied["barge_in_enabled"] = _truthy(payload.get("barge_in_enabled"))
+        if "wake_verifier_mode" in payload:
+            verifier_mode = str(payload.get("wake_verifier_mode") or "off").strip().lower()
+            if verifier_mode in _WAKE_VERIFIER_MODES:
+                applied["wake_verifier_mode"] = verifier_mode
+        if "wake_verifier_window_ms" in payload:
+            applied["wake_verifier_window_ms"] = _integer(
+                payload.get("wake_verifier_window_ms"),
+                1000,
+                minimum=500,
+                maximum=2000,
+            )
+        if "wake_verifier_timeout_ms" in payload:
+            applied["wake_verifier_timeout_ms"] = _integer(
+                payload.get("wake_verifier_timeout_ms"),
+                500,
+                minimum=100,
+                maximum=2000,
+            )
         if "logging_level" in payload:
             level_name = str(payload.get("logging_level") or "info").strip().upper()
             level = getattr(logging, level_name, logging.INFO)
@@ -873,6 +1126,10 @@ class TaterFeatureManager:
             )
             if persist:
                 self._save_settings()
+        if str(self.settings.get("wake_verifier_mode") or "off") == "off":
+            self._fail_open_pending_wake_verification("verifier_disabled_fail_open")
+            with self._wake_audio_lock:
+                self._wake_audio.clear()
         if {"wake_word", "wake_word_url", "wake_engine"}.intersection(payload):
             self._apply_wake_selection()
         if not persist or {"wake_sound_enabled", "wake_sound", "wake_sound_url"}.intersection(payload):
@@ -1984,6 +2241,15 @@ class TaterFeatureManager:
             raise
 
     async def close(self) -> None:
+        if self.wake_verifier_timeout_task is not None and not self.wake_verifier_timeout_task.done():
+            self.wake_verifier_timeout_task.cancel()
+            try:
+                await self.wake_verifier_timeout_task
+            except asyncio.CancelledError:
+                pass
+        self.wake_verifier_timeout_task = None
+        with self._wake_audio_lock:
+            self._wake_audio.clear()
         if self.audio_scene is not None:
             self._stop_audio_scene(ok=False, notify=False)
         if self.overlay_session is not None:
