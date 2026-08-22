@@ -1,0 +1,45 @@
+#!/usr/bin/env python3
+"""Measure the S420 four-channel input without saving microphone audio."""
+
+import argparse
+import json
+import time
+
+from linux_voice_assistant.s420_audio import S420FourChannelRecorder
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Measure S420 mic0/mic1 and stereo speaker-reference levels. "
+            "Speak and play local audio during the capture. No PCM is saved."
+        )
+    )
+    parser.add_argument("--device", default="hw:0,4")
+    parser.add_argument("--seconds", type=float, default=8.0)
+    parser.add_argument("--json", action="store_true")
+    args = parser.parse_args()
+
+    duration = max(1.0, min(60.0, args.seconds))
+    deadline = time.monotonic() + duration
+    with S420FourChannelRecorder(args.device, blocksize=1024) as recorder:
+        while time.monotonic() < deadline:
+            recorder.record(1024)
+        result = recorder.status()
+
+    if args.json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return 0
+
+    print(f"Capture backend: {result['capture_backend']} ({result['capture_device']})")
+    print("Channel       RMS dBFS    Peak")
+    for name, values in result["channels"].items():
+        rms = values["rms_dbfs"]
+        rms_text = "silence" if rms is None else f"{rms:7.1f}"
+        print(f"{name:12} {rms_text:>8} {values['peak']:7d}")
+    print("Expected mapping: mic0/mic1 are physical mics; ref_left/ref_right follow local playback.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

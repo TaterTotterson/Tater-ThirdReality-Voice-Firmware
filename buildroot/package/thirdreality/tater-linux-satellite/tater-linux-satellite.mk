@@ -56,10 +56,14 @@ define TATER_LINUX_SATELLITE_INSTALL_RESOURCES
 		\( -name 'hey_home_assistant.*' -o -iname '*nabu*' \) -delete
 	$(INSTALL) -D -m 0644 $(TATER_LINUX_SATELLITE_PKGDIR)/files/tater_features.py \
 		$(TATER_LINUX_SATELLITE_PYTHON_SITE)/linux_voice_assistant/tater_features.py
+	$(INSTALL) -D -m 0644 $(TATER_LINUX_SATELLITE_PKGDIR)/files/s420_audio.py \
+		$(TATER_LINUX_SATELLITE_PYTHON_SITE)/linux_voice_assistant/s420_audio.py
 	printf '%s\n' 'tater-thirdreality-$(TATER_LINUX_SATELLITE_VERSION)' > \
 		$(TATER_LINUX_SATELLITE_PYTHON_SITE)/version.txt
 	$(INSTALL) -D -m 0755 $(TATER_LINUX_SATELLITE_PKGDIR)/files/tater-satellite-launcher \
 		$(TARGET_DIR)/usr/bin/tater-satellite
+	$(INSTALL) -D -m 0755 $(TATER_LINUX_SATELLITE_PKGDIR)/files/tater-s420-audio-diagnostic \
+		$(TARGET_DIR)/usr/bin/tater-s420-audio-diagnostic
 	$(INSTALL) -D -m 0755 $(TATER_LINUX_SATELLITE_PKGDIR)/files/tater-configure \
 		$(TARGET_DIR)/usr/bin/tater-configure
 	$(INSTALL) -D -m 0755 $(TATER_LINUX_SATELLITE_PKGDIR)/files/tater-thirdreality-bridge.py \

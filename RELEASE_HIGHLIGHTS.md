@@ -1,4 +1,5 @@
-- Adds Tater STT wake verification to ThirdReality S420 satellites using the same authenticated `TWV1` contract as the ESP satellite family.
-- Supports Off, Observe, and Enforce modes with Tater-controlled capture-window and timeout settings.
-- Lets Enforce mode reject false wakes while safely failing open if verification is unavailable, times out, or the Tater connection drops.
-- Reports verifier readiness and statistics to Tater so S420 devices no longer appear as **No verifier firmware**.
+- Adds playback-gated WebRTC echo cancellation using the S420 codec's synchronized speaker loopback, making the wake word easier to hear while the satellite is playing music.
+- Keeps wake detection active during local music regardless of the TTS barge-in setting; TTS interruption continues to follow that setting.
+- Keeps the normal microphone gain and automatically falls back to the previous mono capture path if direct four-channel capture is unavailable.
+- Applies Tater wake sensitivity on-device and adds the verifier-backed, fail-open `tv_nearby` profile for rooms with persistent television speech.
+- Adds a non-recording S420 channel-level diagnostic; the production path uses microphone 0 while microphone 1 remains available for diagnostics rather than uncalibrated beamforming.

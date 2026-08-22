@@ -1,0 +1,198 @@
+From: Tater Firmware <firmware@tater.local>
+Subject: [PATCH] add S420 playback-reference AEC
+
+Use the S420 codec's synchronized four-channel endpoint when configured. Keep
+the original SoundCard input as an automatic fallback, process microphone 0 as
+the production voice channel, and feed the stereo playback loopback to WebRTC
+AEC only while mpv is genuinely rendering local audio. This leaves microphone
+gain unchanged and keeps wake detection independent of the barge-in setting.
+
+diff --git a/linux_voice_assistant/__main__.py b/linux_voice_assistant/__main__.py
+index 6a790b3..44c1603 100644
+--- a/linux_voice_assistant/__main__.py
++++ b/linux_voice_assistant/__main__.py
+@@ -61,6 +61,13 @@ async def main() -> None:
+         type=int,
+         default=1024,
+     )
++    parser.add_argument(
++        "--s420-four-channel-device",
++        help=(
++            "Direct four-channel ALSA capture device for S420 playback AEC; "
++            "falls back to --audio-input-device when unavailable"
++        ),
++    )
+     parser.add_argument(
+         "--audio-output-device",
+         help="Name for the audio output device (see --list-output-devices)",
+@@ -337,7 +344,9 @@ async def main() -> None:
+     args.download_dir = Path(args.download_dir)
+     args.download_dir.mkdir(parents=True, exist_ok=True)
+ 
+-    # Resolve microphone
++    # Resolve the ordinary microphone first. The S420 direct-capture adapter
++    # keeps this object as a safe fallback if the four-channel device is not
++    # present or stops unexpectedly.
+     if args.audio_input_device is not None:
+         try:
+             args.audio_input_device = int(args.audio_input_device)
+@@ -348,6 +357,14 @@ async def main() -> None:
+     else:
+         mic = sc.default_microphone()
+ 
++    if args.s420_four_channel_device:
++        from .s420_audio import S420FourChannelMicrophone
++
++        mic = S420FourChannelMicrophone(
++            args.s420_four_channel_device,
++            fallback_microphone=mic,
++        )
++
+     # Load available wake words
+     wake_word_dirs = [Path(ww_dir) for ww_dir in args.wake_word_dir]
+ 
+@@ -575,6 +592,7 @@ def process_audio(
+ 
+     last_active: Optional[float] = None
+     webrtc: Optional[WebRTCProcessor] = None
++    next_audio_status = 0.0
+ 
+     try:
+         _LOGGER.debug("Opening audio input device: %s", mic.name)
+@@ -582,6 +600,7 @@ def process_audio(
+             while not stop_event.is_set():
+                 # Shape: (block_size, n_channels) for stereo, (block_size, 1) for mono.
+                 raw = mic_in.record(block_size)  # float32, range [-1, 1]
++                reference_audio = getattr(mic_in, "reference_audio", None)
+                 mic_vol_scalar = max(0.1, min(1.0, state.mic_volume / 100.0))
+ 
+                 # Build per-channel byte arrays.  Channel 0 is the primary
+@@ -598,14 +617,35 @@ def process_audio(
+                 agc = state.preferences.mic_auto_gain or 0
+                 ns = state.preferences.mic_noise_suppression or 0
+ 
+-                if agc > 0 or ns > 0:
++                far_end_active = bool(
++                    getattr(state.music_player, "far_end_active", False)
++                    or getattr(state.tts_player, "far_end_active", False)
++                )
++                use_aec = reference_audio is not None and far_end_active
++                now = time.monotonic()
++                if now >= next_audio_status:
++                    capture_status = getattr(mic_in, "status", None)
++                    if callable(capture_status):
++                        frontend_status = capture_status()
++                        frontend_status["playback_aec_active"] = use_aec
++                        state.tater_audio_frontend = frontend_status
++                    next_audio_status = now + 1.0
++                if agc > 0 or ns > 0 or use_aec:
+                     if webrtc is None:
+                         webrtc = WebRTCProcessor(agc_level=agc, ns_level=ns)
+                     else:
+                         webrtc.update_settings(agc, ns)
+-                    audio_chunk = webrtc.process(audio_chunk)
++                    audio_chunk = webrtc.process(
++                        audio_chunk,
++                        reference_audio=reference_audio,
++                        echo_cancellation=use_aec,
++                    )
+                     if not audio_chunk:
+                         continue
++                elif webrtc is not None:
++                    # Restore the unmodified microphone path immediately when
++                    # local playback stops and AGC/NS are disabled.
++                    webrtc.set_echo_cancellation(False)
+ 
+                 if state.satellite is None or not hasattr(state.satellite, "_is_streaming_audio"):
+                     continue
+diff --git a/linux_voice_assistant/mpv_player.py b/linux_voice_assistant/mpv_player.py
+index 86cb99b..1ffc556 100644
+--- a/linux_voice_assistant/mpv_player.py
++++ b/linux_voice_assistant/mpv_player.py
+@@ -154,6 +154,11 @@ class MpvMediaPlayer:
+         state = self._player.state()
+         return state in (PlayerState.PLAYING, PlayerState.PAUSED, PlayerState.LOADING)
+ 
++    @property
++    def far_end_active(self) -> bool:
++        """True only while audio is genuinely being rendered to the speaker."""
++        return self._player.state() == PlayerState.PLAYING
++
+     def set_volume(self, volume: float) -> None:
+         """
+         Set playback volume.
+diff --git a/linux_voice_assistant/webrtc.py b/linux_voice_assistant/webrtc.py
+index f6e943e..2b9c6a6 100644
+--- a/linux_voice_assistant/webrtc.py
++++ b/linux_voice_assistant/webrtc.py
+@@ -7,10 +7,12 @@ class WebRTCProcessor:
+     def __init__(self, agc_level: int = 0, ns_level: int = 0):
+         from webrtc_noise_gain import AudioProcessor  # type: ignore[import-untyped]
+ 
+-        self.apm = AudioProcessor(agc_level, ns_level)
++        self.apm = AudioProcessor(agc_level, ns_level, False)
+         self.agc_level = agc_level
+         self.ns_level = ns_level
++        self.echo_cancellation = False
+         self._buffer = bytearray()
++        self._reference_buffer = bytearray()
+         self.FRAME_SIZE_BYTES = 320  # 160 samples * 2 bytes (16-bit PCM)
+ 
+     def update_settings(self, agc_level: int, ns_level: int):
+@@ -19,22 +21,51 @@ class WebRTCProcessor:
+             from webrtc_noise_gain import AudioProcessor
+ 
+             _LOGGER.debug("Updating WebRTC settings: Gain=%s, NS=%s", agc_level, ns_level)
+-            self.apm = AudioProcessor(agc_level, ns_level)
++            self.apm = AudioProcessor(agc_level, ns_level, self.echo_cancellation)
+             self.agc_level = agc_level
+             self.ns_level = ns_level
+ 
+-    def process(self, raw_bytes: bytes) -> bytes:
++    def set_echo_cancellation(self, enabled: bool) -> None:
++        enabled = bool(enabled)
++        if self.echo_cancellation == enabled:
++            return
++        self.apm.SetEchoCancellation(enabled)
++        self.echo_cancellation = enabled
++        # Discard fractional near/far-end frames together at both edges of a
++        # playback session. This prevents a partial pre-playback microphone
++        # frame from being paired with a new playback reference as well as
++        # stale frames carrying into a later session.
++        self._buffer.clear()
++        self._reference_buffer.clear()
++
++    def process(
++        self,
++        raw_bytes: bytes,
++        *,
++        reference_audio: bytes | None = None,
++        echo_cancellation: bool = False,
++    ) -> bytes:
+         """
+         Buffer and process audio.
+         Returns processed bytes (may be shorter than input if buffering).
+         """
++        echo_cancellation = bool(echo_cancellation and reference_audio is not None)
++        self.set_echo_cancellation(echo_cancellation)
+         self._buffer.extend(raw_bytes)
++        if echo_cancellation:
++            self._reference_buffer.extend(reference_audio or b"")
+         processed_chunks: list[bytes] = []
+ 
+-        while len(self._buffer) >= self.FRAME_SIZE_BYTES:
++        while len(self._buffer) >= self.FRAME_SIZE_BYTES and (
++            (not echo_cancellation) or len(self._reference_buffer) >= self.FRAME_SIZE_BYTES
++        ):
+             frame = bytes(self._buffer[: self.FRAME_SIZE_BYTES])
+             del self._buffer[: self.FRAME_SIZE_BYTES]  # drain in-place
+ 
++            if echo_cancellation:
++                reference_frame = bytes(self._reference_buffer[: self.FRAME_SIZE_BYTES])
++                del self._reference_buffer[: self.FRAME_SIZE_BYTES]
++                self.apm.ProcessReverse10ms(reference_frame)
+             result = self.apm.Process10ms(frame)
+             processed_chunks.append(result.audio)
+ 
+-- 
+2.50.1

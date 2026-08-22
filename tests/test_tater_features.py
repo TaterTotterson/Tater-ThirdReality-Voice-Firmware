@@ -256,6 +256,10 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.manager.capabilities["looping_background_audio"])
         self.assertTrue(self.manager.capabilities["barge_in"])
         self.assertTrue(self.manager.capabilities["wake_verifier"])
+        self.assertTrue(self.manager.capabilities["wake_sensitivity"])
+        self.assertTrue(self.manager.capabilities["wake_environment_profiles"])
+        self.assertTrue(self.manager.capabilities["wake_during_playback"])
+        self.assertTrue(self.manager.capabilities["playback_reference_aec"])
         self.assertEqual(self.manager.capabilities["media_output_latency_frames"], 6144)
         self.assertEqual(self.manager.capabilities["audio_session_version"], 2)
         self.assertEqual(self.manager.capabilities["audio_scene_version"], 1)
@@ -324,6 +328,105 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
         verifier = self.manager.status()["wake_engine"]["verifier"]
         self.assertFalse(verifier["pending"])
         self.assertEqual(verifier["completed"], 0)
+
+    async def test_wake_sensitivity_changes_effective_threshold_without_losing_base(self) -> None:
+        self.manager.handle_message(
+            {
+                "type": "settings",
+                "payload": {
+                    "wake_threshold": 0.99,
+                    "wake_sensitivity": "high",
+                    "wake_environment": "far_field",
+                },
+            }
+        )
+        self.assertAlmostEqual(
+            self.client.state.wake_word_1_threshold,
+            242.0 / 255.0,
+        )
+        policy = self.manager.status()["wake_engine"]["policy"]
+        self.assertEqual(policy["sensitivity"], "high")
+        self.assertEqual(policy["environment"], "far_field")
+        self.assertAlmostEqual(policy["configured_threshold"], 0.99)
+
+        self.manager.handle_message(
+            {
+                "type": "settings",
+                "payload": {"wake_sensitivity": "normal"},
+            }
+        )
+        self.assertAlmostEqual(self.client.state.wake_word_1_threshold, 0.99)
+
+    async def test_wake_sensitivity_persists_original_base_across_restart(self) -> None:
+        self.manager.handle_message(
+            {
+                "type": "settings",
+                "payload": {"wake_sensitivity": "high"},
+            }
+        )
+        persisted = json.loads(tater_features._SETTINGS_PATH.read_text(encoding="utf-8"))
+        self.assertAlmostEqual(persisted["wake_threshold"], 0.97)
+        self.assertAlmostEqual(
+            self.client.state.preferences.wake_word_1_sensitivity,
+            242.0 / 255.0,
+        )
+
+        restarted_client = _Client()
+        restarted_client.state.preferences.wake_word_1_sensitivity = 242.0 / 255.0
+        restarted_client.state.wake_word_1_threshold = 242.0 / 255.0
+        restarted_client._loop = asyncio.get_running_loop()
+        restarted = tater_features.TaterFeatureManager(restarted_client)
+        try:
+            restarted.connected()
+            restarted.handle_message(
+                {
+                    "type": "settings",
+                    "payload": {"wake_sensitivity": "normal"},
+                }
+            )
+            self.assertAlmostEqual(restarted_client.state.wake_word_1_threshold, 0.97)
+        finally:
+            await restarted.close()
+
+    async def test_tv_nearby_forces_fail_open_wake_verification(self) -> None:
+        self.manager.handle_message(
+            {
+                "type": "settings",
+                "payload": {
+                    "wake_threshold": 0.99,
+                    "wake_sensitivity": "high",
+                    "wake_environment": "tv_nearby",
+                    "wake_verifier_mode": "off",
+                },
+            }
+        )
+        policy = self.manager.status()["wake_engine"]["policy"]
+        self.assertAlmostEqual(policy["effective_threshold"], 219.0 / 255.0)
+        self.assertTrue(policy["require_verification"])
+
+        self.manager.capture_wake_verifier_audio(b"\x05\x00" * 16000)
+        self.assertTrue(self.manager.begin_wake_verification("Hey Tater"))
+        await asyncio.sleep(0)
+        packet = self.client.binary_frames[-1]
+        request_id = struct.Struct("<4sBBHIII").unpack_from(packet)[4]
+        self.assertEqual(struct.Struct("<4sBBHIII").unpack_from(packet)[3], 1)
+
+        self.manager.handle_message(
+            {
+                "type": "wake.verify.result",
+                "payload": {
+                    "request_id": request_id,
+                    "accepted": False,
+                    "available": False,
+                    "reason": "verifier unavailable",
+                },
+            }
+        )
+        self.assertEqual(self.client.satellite.verified_wakes, ["Hey Tater"])
+        self.assertEqual(
+            self.manager.status()["wake_engine"]["verifier"]["fail_open"],
+            1,
+        )
 
     async def test_wake_verifier_observe_uploads_twv1_without_deferring(self) -> None:
         self.manager.handle_message(

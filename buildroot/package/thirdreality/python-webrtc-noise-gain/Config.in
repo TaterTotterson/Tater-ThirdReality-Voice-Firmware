@@ -4,6 +4,6 @@ config BR2_PACKAGE_PYTHON_WEBRTC_NOISE_GAIN
 	depends on BR2_PACKAGE_PYTHON_PYBIND
 	help
 	  Tiny Python wrapper around webrtc-audio-processing
-	  for noise suppression and auto gain only.
+	  for noise suppression, auto gain, and playback-reference AEC.
 
 	  https://github.com/rhasspy/webrtc-noise-gain

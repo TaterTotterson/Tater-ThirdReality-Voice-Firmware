@@ -79,6 +79,7 @@ set -- /usr/bin/linux-voice-assistant \
     --wake-model "$WAKE_WORD" \
     --preferences-file "$PREFERENCES_FILE" \
     --download-dir "$DOWNLOAD_DIR" \
+    --s420-four-channel-device hw:0,4 \
     --audio-input-channels 1 \
     --mic-volume "$MIC_VOLUME" \
     --mic-auto-gain "$MIC_AUTO_GAIN" \

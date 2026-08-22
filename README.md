@@ -16,7 +16,7 @@ tree, audio routing, LEDs, and recovery image format.
 ```text
 ThirdReality Amlogic BSP / Buildroot
 ├── Tater Linux Voice (pinned Git commit)
-│   ├── local Hey Tater wake word and microphone capture
+│   ├── local Hey Tater wake word and playback-reference AEC
 │   ├── outbound authenticated Tater WebSocket
 │   ├── timers, live settings, and signed OTA
 │   └── localhost hardware API
@@ -35,7 +35,7 @@ A weekly CI check reports when Tater Linux Voice `main` moves ahead.
 ## Current status
 
 The S420 is now a supported Tater-native satellite with released factory and
-OTA images. The current release is `s420-0.2.8`. The complete first-install
+OTA images. The current release is `s420-0.2.9`. The complete first-install
 path has been exercised on physical hardware: Tater can use the ThirdReality
 debug board to enter Amlogic USB-burn mode, write the verified factory image,
 boot the speaker, and verify the installed Tater runtime.
@@ -45,6 +45,10 @@ The everyday device path is also in place:
 - first-boot `Tater-Setup-XXXX` hotspot and captive portal
 - authenticated Tater pairing with persistent Wi-Fi, room, name, and settings
 - local wake word, microphone streaming, STT/TTS, continued chat, and timers
+- playback-gated WebRTC AEC from the S420 codec loopback, with unchanged mic
+  gain and automatic fallback to the existing mono capture path
+- live wake sensitivity and a `tv_nearby` candidate profile that requires the
+  Tater verifier but safely fails open when verification is unavailable
 - optional Tater STT wake verification with observe, enforce, and fail-open modes
 - Tater-controlled wake model, threshold, and wake-sound settings, including
   the complete built-in sound catalog, No Sound, and cached custom WAV URLs
@@ -90,7 +94,7 @@ For a disposable development build:
 ```sh
 ./script/generate_development_ota_key.sh
 TATER_SWUPDATE_PRIVATE_KEY_FILE=.secrets/swupdate-development-private.pem \
-  ./go --docker trspk 0.2.8
+  ./go --docker trspk 0.2.9
 ```
 
 Artifacts are written to `image/` as an Amlogic USB-burn image and a signed
@@ -122,6 +126,18 @@ tater-configure \
 Long-press the Tap button to erase Wi-Fi and Tater pairing and reopen the setup
 hotspot. See [provisioning](docs/PROVISIONING.md) for the full flow, storage
 paths, and recovery controls.
+
+For a non-recording channel-map check on physical hardware, speak and play
+local audio while running:
+
+```sh
+tater-s420-audio-diagnostic --seconds 8
+```
+
+The expected map is physical microphones on channels 0/1 and rendered stereo
+playback references on channels 2/3. The production voice path uses mic 0;
+mic 1 remains diagnostic-only until measured hardware data justifies a
+two-microphone algorithm.
 
 ## Validate without building an image
 

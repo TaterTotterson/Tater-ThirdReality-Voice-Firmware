@@ -49,9 +49,25 @@ TATER_WAKE_VERIFIER_PATCH = (
     ROOT
     / "buildroot/package/thirdreality/tater-linux-satellite/0009-add-tater-stt-wake-verifier.patch"
 )
+TATER_S420_AEC_PATCH = (
+    ROOT
+    / "buildroot/package/thirdreality/tater-linux-satellite/0010-add-s420-playback-reference-aec.patch"
+)
+WEBRTC_AEC_PATCH = (
+    ROOT
+    / "buildroot/package/thirdreality/python-webrtc-noise-gain/0001-add-playback-reference-aec.patch"
+)
 TATER_FEATURES = (
     ROOT
     / "buildroot/package/thirdreality/tater-linux-satellite/files/tater_features.py"
+)
+S420_AUDIO = (
+    ROOT
+    / "buildroot/package/thirdreality/tater-linux-satellite/files/s420_audio.py"
+)
+S420_AUDIO_DIAGNOSTIC = (
+    ROOT
+    / "buildroot/package/thirdreality/tater-linux-satellite/files/tater-s420-audio-diagnostic"
 )
 TATER_WAKE_SOUNDS = (
     ROOT
@@ -143,7 +159,11 @@ def main() -> int:
     tater_barge_in_patch = TATER_BARGE_IN_PATCH.read_text(encoding="utf-8")
     tater_wake_sound_patch = TATER_WAKE_SOUND_PATCH.read_text(encoding="utf-8")
     tater_wake_verifier_patch = TATER_WAKE_VERIFIER_PATCH.read_text(encoding="utf-8")
+    tater_s420_aec_patch = TATER_S420_AEC_PATCH.read_text(encoding="utf-8")
+    webrtc_aec_patch = WEBRTC_AEC_PATCH.read_text(encoding="utf-8")
     tater_features = TATER_FEATURES.read_text(encoding="utf-8")
+    s420_audio = S420_AUDIO.read_text(encoding="utf-8")
+    s420_audio_diagnostic = S420_AUDIO_DIAGNOSTIC.read_text(encoding="utf-8")
     launcher = LAUNCHER.read_text(encoding="utf-8")
     hardware_bridge = HARDWARE_BRIDGE.read_text(encoding="utf-8")
     provisioning = PROVISIONING.read_text(encoding="utf-8")
@@ -291,6 +311,10 @@ def main() -> int:
         "wake_sounds",
         "custom_wake_sounds",
         "wake_verifier",
+        "wake_sensitivity",
+        "wake_environment_profiles",
+        "wake_during_playback",
+        "playback_reference_aec",
     ):
         require(f'"{capability}": True' in tater_features, f"Tater feature is missing: {capability}", errors)
     for capability in (
@@ -390,11 +414,61 @@ def main() -> int:
         "wake_verifier_mode",
         "wake_verifier_window_ms",
         "wake_verifier_timeout_ms",
-        '"wake_engine": {"verifier": self._wake_verifier_status()}',
+        '"verifier": self._wake_verifier_status()',
     ):
         require(
             primitive in tater_features,
             f"Tater STT wake-verifier primitive is missing: {primitive}",
+            errors,
+        )
+    for primitive in (
+        "--s420-four-channel-device",
+        "reference_audio",
+        "far_end_active",
+        "echo_cancellation=use_aec",
+    ):
+        require(
+            primitive in tater_s420_aec_patch,
+            f"S420 playback-reference AEC hook is missing: {primitive}",
+            errors,
+        )
+    for primitive in (
+        "SetEchoCancellation",
+        "ProcessReverse10ms",
+        "ProcessReverseStream",
+    ):
+        require(
+            primitive in webrtc_aec_patch,
+            f"WebRTC playback-reference primitive is missing: {primitive}",
+            errors,
+        )
+    require(
+        'samples[:, 0]' in s420_audio
+        and 'samples[:, 2]' in s420_audio
+        and 'samples[:, 3]' in s420_audio,
+        "S420 four-channel mapping is incomplete",
+        errors,
+    )
+    require(
+        "soundcard_fallback" in s420_audio,
+        "S420 direct capture does not preserve the existing mono fallback",
+        errors,
+    )
+    require(
+        "No PCM is saved" in s420_audio_diagnostic,
+        "S420 audio diagnostic does not document its non-recording behavior",
+        errors,
+    )
+    for primitive in (
+        "wake_sensitivity",
+        "wake_environment",
+        "tv_nearby",
+        "require_verification",
+        "_wake_detection_policy",
+    ):
+        require(
+            primitive in tater_features,
+            f"S420 wake policy primitive is missing: {primitive}",
             errors,
         )
     require(
@@ -488,6 +562,16 @@ def main() -> int:
     require("get_tater_check_url" in netmonitor, "network monitor does not probe the paired Tater server", errors)
     require("--peripheral-host 127.0.0.1" in launcher, "peripheral API is not loopback-only", errors)
     require("--tater-board thirdreality_s420" in launcher, "board identity is missing", errors)
+    require(
+        "--s420-four-channel-device hw:0,4" in launcher,
+        "S420 synchronized capture is not enabled by the launcher",
+        errors,
+    )
+    require(
+        '--mic-volume "$MIC_VOLUME"' in launcher and "MIC_VOLUME=1600" not in launcher,
+        "S420 launcher does not preserve its configured 1x microphone gain",
+        errors,
+    )
     require("WAKE_WORD=hey_tater" in launcher, "Hey Tater is not the launcher default", errors)
     require("okay_nabu" not in launcher, "launcher retains the old Home Assistant wake word", errors)
     require("-iname '*nabu*'" in package_mk, "Home Assistant wake-word assets are not pruned", errors)

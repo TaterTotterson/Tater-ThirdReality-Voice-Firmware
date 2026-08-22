@@ -56,6 +56,8 @@ _WAKE_SOUND_IDS = {"default", "no_sound", "custom", *_WAKE_SOUND_FILES}
 _WAKE_VERIFIER_PACKET = struct.Struct("<4sBBHIII")
 _WAKE_VERIFIER_MAX_SAMPLES = 16000 * 2
 _WAKE_VERIFIER_MODES = {"off", "observe", "enforce"}
+_WAKE_SENSITIVITIES = {"low", "normal", "high", "very_high"}
+_WAKE_ENVIRONMENTS = {"far_field", "balanced", "strict", "tv_nearby"}
 _MEDIA_SAMPLE_RATE_HZ = 48000
 _MEDIA_PREPARE_TIMEOUT_SECONDS = 60.0
 _MEDIA_COMMIT_TIMEOUT_SECONDS = 30.0
@@ -102,6 +104,71 @@ def _signed_integer(value: Any, default: int = 0, *, limit: int = 2**31 - 1) -> 
     except (TypeError, ValueError):
         result = default
     return max(-abs(limit), min(abs(limit), result))
+
+
+def _normalize_wake_sensitivity(value: Any) -> str:
+    normalized = str(value or "normal").strip().lower()
+    aliases = {
+        "medium": "normal",
+        "conservative": "low",
+        "sensitive": "high",
+        "very_sensitive": "very_high",
+    }
+    normalized = aliases.get(normalized, normalized)
+    return normalized if normalized in _WAKE_SENSITIVITIES else "normal"
+
+
+def _normalize_wake_environment(value: Any) -> str:
+    normalized = str(value or "balanced").strip().lower()
+    aliases = {
+        "quiet": "far_field",
+        "quiet_room": "far_field",
+        "very_sensitive": "far_field",
+        "tv": "tv_nearby",
+        "near_tv": "tv_nearby",
+    }
+    normalized = aliases.get(normalized, normalized)
+    return normalized if normalized in _WAKE_ENVIRONMENTS else "balanced"
+
+
+def _wake_detection_policy(sensitivity: Any, environment: Any, configured_threshold: Any) -> dict[str, Any]:
+    """Return the subset of the shared wake policy supported by microWakeWord."""
+    try:
+        configured = float(configured_threshold)
+    except (TypeError, ValueError):
+        configured = 0.97
+    configured = max(0.01, min(0.99, configured))
+    sensitivity_name = _normalize_wake_sensitivity(sensitivity)
+    environment_name = _normalize_wake_environment(environment)
+
+    threshold = configured
+    if sensitivity_name == "low":
+        threshold = max(threshold, 251.0 / 255.0)
+    elif sensitivity_name == "high":
+        threshold = min(threshold, 242.0 / 255.0)
+    elif sensitivity_name == "very_high":
+        threshold = min(threshold, 235.0 / 255.0)
+
+    require_verification = False
+    if environment_name == "strict":
+        threshold = max(threshold, 247.0 / 255.0)
+    elif environment_name == "tv_nearby":
+        tv_ceiling = {
+            "low": 235.0 / 255.0,
+            "normal": 224.0 / 255.0,
+            "high": 219.0 / 255.0,
+            "very_high": 209.0 / 255.0,
+        }[sensitivity_name]
+        threshold = min(threshold, tv_ceiling)
+        require_verification = True
+
+    return {
+        "sensitivity": sensitivity_name,
+        "environment": environment_name,
+        "configured_threshold": configured,
+        "effective_threshold": max(0.01, min(0.99, threshold)),
+        "require_verification": require_verification,
+    }
 
 
 def _frame(message_type: str, payload: Optional[dict[str, Any]] = None) -> str:
@@ -478,6 +545,19 @@ class TaterFeatureManager:
         self._wake_verifier_last_reason = ""
         self._default_wakeup_sound = str(getattr(self.state, "wakeup_sound", "") or "")
         self.settings = self._load_settings()
+        try:
+            self._configured_wake_threshold = float(
+                self.settings.get(
+                    "wake_threshold",
+                    getattr(self.state, "wake_word_1_threshold", 0.97),
+                )
+            )
+        except (TypeError, ValueError):
+            self._configured_wake_threshold = 0.97
+        self._configured_wake_threshold = max(
+            0.01,
+            min(0.99, self._configured_wake_threshold),
+        )
         self.satellite._tater_barge_in_enabled = _truthy(  # pylint: disable=protected-access
             self.settings.get("barge_in_enabled")
         )
@@ -489,6 +569,10 @@ class TaterFeatureManager:
             "wake_sounds": True,
             "custom_wake_sounds": True,
             "wake_verifier": True,
+            "wake_sensitivity": True,
+            "wake_environment_profiles": True,
+            "wake_during_playback": True,
+            "playback_reference_aec": True,
             "status_led": True,
             "setup_mode": True,
             "timers": True,
@@ -531,10 +615,33 @@ class TaterFeatureManager:
         except RuntimeError:
             callback(*args)
 
+    def _wake_policy(self) -> dict[str, Any]:
+        return _wake_detection_policy(
+            self.settings.get("wake_sensitivity"),
+            self.settings.get("wake_environment"),
+            self._configured_wake_threshold,
+        )
+
+    def _wake_verification_required(self) -> bool:
+        return bool(self._wake_policy()["require_verification"])
+
+    def _apply_wake_policy(self, *, persist_preferences: bool) -> None:
+        policy = self._wake_policy()
+        threshold = float(policy["effective_threshold"])
+        changed = (
+            abs(float(getattr(self.state, "wake_word_1_threshold", threshold)) - threshold)
+            > 0.0001
+            or getattr(self.state.preferences, "wake_word_1_sensitivity", None) != threshold
+        )
+        self.state.wake_word_1_threshold = threshold
+        self.state.preferences.wake_word_1_sensitivity = threshold
+        if changed and persist_preferences:
+            self.state.save_preferences()
+
     def capture_wake_verifier_audio(self, pcm: bytes) -> None:
         """Keep the latest two seconds of primary-microphone PCM16 audio."""
         mode = str(self.settings.get("wake_verifier_mode") or "off").strip().lower()
-        if mode not in {"observe", "enforce"}:
+        if mode not in {"observe", "enforce"} and not self._wake_verification_required():
             return
         raw = bytes(pcm or b"")
         if len(raw) < 2:
@@ -573,9 +680,10 @@ class TaterFeatureManager:
     def begin_wake_verification(self, wake_word: str) -> bool:
         """Upload a TWV1 wake clip; return True while enforcement defers STT."""
         mode = str(self.settings.get("wake_verifier_mode") or "off").strip().lower()
-        if mode not in {"observe", "enforce"}:
+        force_enforce = self._wake_verification_required()
+        if mode not in {"observe", "enforce"} and not force_enforce:
             return False
-        enforce = mode == "enforce"
+        enforce = force_enforce or mode == "enforce"
         with self._wake_verifier_lock:
             if self._wake_verifier_pending_id:
                 return True
@@ -815,6 +923,7 @@ class TaterFeatureManager:
 
     def status(self) -> dict[str, Any]:
         self._reconcile_ringing_timers()
+        wake_policy = self._wake_policy()
         disk_free = 0
         try:
             disk_free = shutil.disk_usage("/data").free
@@ -829,7 +938,11 @@ class TaterFeatureManager:
             "wake_sound_downloading": self.wake_sound_downloading,
             "wake_word": next(iter(self.state.active_wake_words), ""),
             "wake_sound": str(self.settings.get("wake_sound") or "no_sound"),
-            "wake_engine": {"verifier": self._wake_verifier_status()},
+            "wake_engine": {
+                "policy": wake_policy,
+                "verifier": self._wake_verifier_status(),
+            },
+            "audio_frontend": getattr(self.state, "tater_audio_frontend", {}),
             "data_free_bytes": disk_free,
         }
 
@@ -1054,10 +1167,28 @@ class TaterFeatureManager:
                 threshold = None
             if threshold is not None:
                 threshold = max(0.01, min(0.99, threshold))
-                self.state.wake_word_1_threshold = threshold
-                self.state.preferences.wake_word_1_sensitivity = threshold
-                self.state.save_preferences()
                 applied["wake_threshold"] = threshold
+        if "wake_sensitivity" in payload:
+            sensitivity = str(payload.get("wake_sensitivity") or "").strip().lower()
+            normalized = _normalize_wake_sensitivity(sensitivity)
+            if sensitivity in _WAKE_SENSITIVITIES or sensitivity in {
+                "medium",
+                "conservative",
+                "sensitive",
+                "very_sensitive",
+            }:
+                applied["wake_sensitivity"] = normalized
+        if "wake_environment" in payload:
+            environment = str(payload.get("wake_environment") or "").strip().lower()
+            normalized = _normalize_wake_environment(environment)
+            if environment in _WAKE_ENVIRONMENTS or environment in {
+                "quiet",
+                "quiet_room",
+                "very_sensitive",
+                "tv",
+                "near_tv",
+            }:
+                applied["wake_environment"] = normalized
         if "wake_engine" in payload:
             engine = str(payload.get("wake_engine") or "micro_wake_word").strip()
             if engine in {"off", "button", "micro_wake_word"}:
@@ -1121,12 +1252,27 @@ class TaterFeatureManager:
                 applied[key] = animation
         if applied:
             self.settings.update(applied)
+            if "wake_threshold" in applied:
+                self._configured_wake_threshold = float(applied["wake_threshold"])
+            if {"wake_threshold", "wake_sensitivity", "wake_environment"}.intersection(applied):
+                # Preserve the user's unmodified base threshold across a
+                # reboot. Preferences contain the effective policy threshold,
+                # which may be intentionally more or less sensitive.
+                self.settings["wake_threshold"] = self._configured_wake_threshold
             self.satellite._tater_barge_in_enabled = _truthy(  # pylint: disable=protected-access
                 self.settings.get("barge_in_enabled")
             )
             if persist:
                 self._save_settings()
-        if str(self.settings.get("wake_verifier_mode") or "off") == "off":
+        policy_keys = {"wake_threshold", "wake_sensitivity", "wake_environment"}
+        if policy_keys.intersection(applied) or not persist:
+            self._apply_wake_policy(
+                persist_preferences=persist and bool(policy_keys.intersection(applied))
+            )
+        if (
+            str(self.settings.get("wake_verifier_mode") or "off") == "off"
+            and not self._wake_verification_required()
+        ):
             self._fail_open_pending_wake_verification("verifier_disabled_fail_open")
             with self._wake_audio_lock:
                 self._wake_audio.clear()
