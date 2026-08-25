@@ -23,6 +23,7 @@ FEATURES_PATH = (
 class _Event(str, Enum):
     TIMER_RINGING = "timer_ringing"
     IDLE = "idle"
+    LIGHT_COMMAND = "light_command"
 
 
 class _WakeWordType(str, Enum):
@@ -77,6 +78,7 @@ class _Player:
         self.speed = 1.0
         self.resume_count = 0
         self.pause_count = 0
+        self.stop_count = 0
 
     def set_volume(self, value):
         self.volume = value
@@ -113,6 +115,7 @@ class _Player:
         self.snapshot["paused"] = True
 
     def stop(self):
+        self.stop_count += 1
         callback = self.done_callback
         self.done_callback = None
         if callback is not None:
@@ -251,7 +254,9 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.manager.capabilities["media_rate_slew"])
         self.assertTrue(self.manager.capabilities["media_render_clock"])
         self.assertTrue(self.manager.capabilities["media_underrun_recovery"])
+        self.assertTrue(self.manager.capabilities["media_stall_recovery"])
         self.assertTrue(self.manager.capabilities["synchronized_tts_overlays"])
+        self.assertTrue(self.manager.capabilities["audio_stall_recovery"])
         self.assertTrue(self.manager.capabilities["audio_scenes"])
         self.assertTrue(self.manager.capabilities["looping_background_audio"])
         self.assertTrue(self.manager.capabilities["barge_in"])
@@ -717,6 +722,23 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.manager.settings["led_replying_animation"], "solid")
         self.assertNotIn("led_tool_call_animation", self.manager.settings)
 
+    async def test_tool_call_start_selects_the_configured_led_state(self) -> None:
+        handled = self.manager.handle_message(
+            {
+                "type": "voice.event",
+                "payload": {
+                    "event": "VOICE_ASSISTANT_TOOL_CALL_START",
+                    "data": {"tool": "weather_forecast"},
+                },
+            }
+        )
+
+        self.assertFalse(handled)
+        self.assertEqual(
+            self.client.satellite.events[-1],
+            (_Event.LIGHT_COMMAND, {"state": True, "effect": "tool_call"}),
+        )
+
     async def test_custom_wake_package_keeps_runtime_and_preference_ids_aligned(self) -> None:
         manifest_url = "https://tater.test/models/hello.json"
         manifest = {
@@ -848,8 +870,7 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.client.state.music_player.duck_factor, 0.25)
         self.assertTrue(self._messages("audio.overlay.started"))
         self.client.state.tts_player.done_callback()
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
+        await asyncio.sleep(0.01)
         self.assertIsNone(self.client.state.music_player.duck_factor)
         self.assertTrue(self._messages("audio.overlay.finished"))
 
@@ -912,8 +933,7 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(self.client.state.music_player.resume_count, 1)
         self.assertGreaterEqual(self.client.state.tts_player.resume_count, 1)
         self.client.state.tts_player.done_callback()
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
+        await asyncio.sleep(0.01)
         finished = self._messages("audio.scene.finished")[-1]["payload"]
         self.assertEqual(finished, {"scene_id": "weather-scene", "ok": True})
         self.assertIsNone(self.client.state.music_player.duck_factor)
@@ -940,6 +960,186 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(session.rejoin_frames, 90000)
         self.assertGreaterEqual(self.client.state.music_player.pause_count, 1)
         self.assertGreaterEqual(self.client.state.music_player.resume_count, 2)
+
+    async def test_media_watchdog_stops_a_render_clock_that_does_not_advance(self) -> None:
+        original_interval = tater_features._MEDIA_PLAYHEAD_INTERVAL_SECONDS
+        original_watchdog_interval = tater_features._PLAYBACK_WATCHDOG_INTERVAL_SECONDS
+        original_stall_timeout = tater_features._PLAYBACK_STALL_TIMEOUT_SECONDS
+        tater_features._MEDIA_PLAYHEAD_INTERVAL_SECONDS = 0.01
+        tater_features._PLAYBACK_WATCHDOG_INTERVAL_SECONDS = 0.01
+        tater_features._PLAYBACK_STALL_TIMEOUT_SECONDS = 0.03
+        try:
+            self.manager.handle_message(
+                {
+                    "type": "media.session.start",
+                    "id": "stalled-media-request",
+                    "payload": {
+                        "session_id": "stalled-media",
+                        "media": {"url": "https://tater.test/stalled.flac"},
+                    },
+                }
+            )
+            await asyncio.sleep(0.1)
+
+            self.assertIsNone(self.manager.media_session)
+            self.assertEqual(self.manager.media_session_id, "")
+            self.assertGreaterEqual(self.client.state.music_player.stop_count, 1)
+            finished = self._messages("media.session.finished")[-1]["payload"]
+            self.assertEqual(finished["session_id"], "stalled-media")
+            self.assertFalse(finished["ok"])
+            self.assertTrue(
+                any(
+                    "Playback watchdog" in frame["payload"].get("message", "")
+                    for frame in self._messages("log")
+                )
+            )
+        finally:
+            tater_features._MEDIA_PLAYHEAD_INTERVAL_SECONDS = original_interval
+            tater_features._PLAYBACK_WATCHDOG_INTERVAL_SECONDS = original_watchdog_interval
+            tater_features._PLAYBACK_STALL_TIMEOUT_SECONDS = original_stall_timeout
+
+    async def test_media_watchdog_stops_persistent_rebuffering(self) -> None:
+        original_interval = tater_features._MEDIA_PLAYHEAD_INTERVAL_SECONDS
+        original_watchdog_interval = tater_features._PLAYBACK_WATCHDOG_INTERVAL_SECONDS
+        original_stall_timeout = tater_features._PLAYBACK_STALL_TIMEOUT_SECONDS
+        tater_features._MEDIA_PLAYHEAD_INTERVAL_SECONDS = 0.01
+        tater_features._PLAYBACK_WATCHDOG_INTERVAL_SECONDS = 0.01
+        tater_features._PLAYBACK_STALL_TIMEOUT_SECONDS = 0.03
+        try:
+            self.client.state.music_player.snapshot["rebuffering"] = True
+            self.manager.handle_message(
+                {
+                    "type": "media.session.start",
+                    "id": "buffering-media-request",
+                    "payload": {
+                        "session_id": "buffering-media",
+                        "media": {"url": "https://tater.test/buffering.flac"},
+                    },
+                }
+            )
+            await asyncio.sleep(0.1)
+
+            self.assertIsNone(self.manager.media_session)
+            finished = self._messages("media.session.finished")[-1]["payload"]
+            self.assertEqual(finished["session_id"], "buffering-media")
+            self.assertFalse(finished["ok"])
+            self.assertTrue(
+                any(
+                    "buffering did not recover" in frame["payload"].get("message", "")
+                    for frame in self._messages("log")
+                )
+            )
+        finally:
+            tater_features._MEDIA_PLAYHEAD_INTERVAL_SECONDS = original_interval
+            tater_features._PLAYBACK_WATCHDOG_INTERVAL_SECONDS = original_watchdog_interval
+            tater_features._PLAYBACK_STALL_TIMEOUT_SECONDS = original_stall_timeout
+
+    async def test_overlay_watchdog_resets_stalled_tts_and_restores_music(self) -> None:
+        original_watchdog_interval = tater_features._PLAYBACK_WATCHDOG_INTERVAL_SECONDS
+        original_stall_timeout = tater_features._PLAYBACK_STALL_TIMEOUT_SECONDS
+        tater_features._PLAYBACK_WATCHDOG_INTERVAL_SECONDS = 0.01
+        tater_features._PLAYBACK_STALL_TIMEOUT_SECONDS = 0.03
+        try:
+            self.manager.handle_message(
+                {
+                    "type": "audio.overlay.start",
+                    "payload": {
+                        "overlay_id": "stalled-overlay",
+                        "foreground": {"url": "https://tater.test/stalled-tts.flac"},
+                        "ducking": {
+                            "target_percent": 20,
+                            "attack_ms": 0,
+                            "release_ms": 0,
+                        },
+                    },
+                }
+            )
+            await asyncio.sleep(0.1)
+
+            self.assertIsNone(self.manager.overlay_session)
+            self.assertGreaterEqual(self.client.state.tts_player.stop_count, 1)
+            self.assertIsNone(self.client.state.music_player.duck_factor)
+            finished = self._messages("audio.overlay.finished")[-1]["payload"]
+            self.assertEqual(finished["overlay_id"], "stalled-overlay")
+            self.assertFalse(finished["ok"])
+        finally:
+            tater_features._PLAYBACK_WATCHDOG_INTERVAL_SECONDS = original_watchdog_interval
+            tater_features._PLAYBACK_STALL_TIMEOUT_SECONDS = original_stall_timeout
+
+    async def test_overlay_watchdog_allows_normal_render_progress(self) -> None:
+        original_watchdog_interval = tater_features._PLAYBACK_WATCHDOG_INTERVAL_SECONDS
+        original_stall_timeout = tater_features._PLAYBACK_STALL_TIMEOUT_SECONDS
+        tater_features._PLAYBACK_WATCHDOG_INTERVAL_SECONDS = 0.01
+        tater_features._PLAYBACK_STALL_TIMEOUT_SECONDS = 0.04
+        try:
+            self.manager.handle_message(
+                {
+                    "type": "audio.overlay.start",
+                    "payload": {
+                        "overlay_id": "healthy-overlay",
+                        "foreground": {"url": "https://tater.test/healthy-tts.flac"},
+                        "ducking": {
+                            "target_percent": 20,
+                            "attack_ms": 0,
+                            "release_ms": 0,
+                        },
+                    },
+                }
+            )
+
+            async def advance_and_finish() -> None:
+                for position in (0.01, 0.02, 0.03, 0.04):
+                    await asyncio.sleep(0.01)
+                    self.client.state.tts_player.snapshot["position_seconds"] = position
+                callback = self.client.state.tts_player.done_callback
+                self.assertIsNotNone(callback)
+                callback()
+
+            await advance_and_finish()
+            await asyncio.sleep(0.02)
+
+            self.assertIsNone(self.manager.overlay_session)
+            finished = self._messages("audio.overlay.finished")[-1]["payload"]
+            self.assertEqual(finished["overlay_id"], "healthy-overlay")
+            self.assertTrue(finished["ok"])
+            self.assertEqual(self.client.state.tts_player.stop_count, 0)
+        finally:
+            tater_features._PLAYBACK_WATCHDOG_INTERVAL_SECONDS = original_watchdog_interval
+            tater_features._PLAYBACK_STALL_TIMEOUT_SECONDS = original_stall_timeout
+
+    async def test_audio_scene_watchdog_stops_stalled_players(self) -> None:
+        original_watchdog_interval = tater_features._PLAYBACK_WATCHDOG_INTERVAL_SECONDS
+        original_stall_timeout = tater_features._PLAYBACK_STALL_TIMEOUT_SECONDS
+        tater_features._PLAYBACK_WATCHDOG_INTERVAL_SECONDS = 0.01
+        tater_features._PLAYBACK_STALL_TIMEOUT_SECONDS = 0.03
+        try:
+            self.manager.handle_message(
+                {
+                    "type": "audio.scene.start",
+                    "payload": {
+                        "scene_id": "stalled-scene",
+                        "foreground": {"url": "https://tater.test/stalled-scene.flac"},
+                        "background": {
+                            "url": "https://tater.test/stalled-bed.flac",
+                            "loop": True,
+                        },
+                        "ducking": {"attack_ms": 0, "release_ms": 0},
+                        "finish": {"fade_ms": 0},
+                    },
+                }
+            )
+            await asyncio.sleep(0.1)
+
+            self.assertIsNone(self.manager.audio_scene)
+            self.assertGreaterEqual(self.client.state.tts_player.stop_count, 1)
+            self.assertGreaterEqual(self.client.state.music_player.stop_count, 1)
+            self.assertIsNone(self.client.state.music_player.duck_factor)
+            finished = self._messages("audio.scene.finished")[-1]["payload"]
+            self.assertEqual(finished["scene_id"], "stalled-scene")
+            self.assertFalse(finished["ok"])
+        finally:
+            tater_features._PLAYBACK_WATCHDOG_INTERVAL_SECONDS = original_watchdog_interval
+            tater_features._PLAYBACK_STALL_TIMEOUT_SECONDS = original_stall_timeout
 
     async def test_synchronized_media_prepare_commit_channel_and_playhead(self) -> None:
         original_interval = tater_features._MEDIA_PLAYHEAD_INTERVAL_SECONDS

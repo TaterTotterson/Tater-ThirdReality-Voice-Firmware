@@ -12,6 +12,7 @@
 #include <gio/gio.h>
 
 #include "led_helper.h"
+#include "led_animation_sequence.h"
 
 using namespace std;
 
@@ -95,6 +96,7 @@ void led_task()
 
 	vector<LedShowInfo> led_show_infos;
 	int index = 0;
+	bool loop_sequence = false;
 	vector<string> animations;
 	while (! led_released) {
 		unique_lock<mutex> mlock(led_command_mutex);
@@ -113,6 +115,7 @@ void led_task()
 
 			// INFO("animation[0]: %d\n", animations[0]);
 			led_show_infos = led_animation_parse(animations[0].c_str());
+			loop_sequence = tater_led_loops_entire_sequence(led_show_infos);
 			animations.erase(animations.begin());
 			index = 0;
 		}
@@ -120,6 +123,7 @@ void led_task()
 		if (to_idle) {
 			led_show_infos.clear();
 			index = 0;
+			loop_sequence = false;
 			turn_off_all();
 			to_idle = false;
 			animations.clear();
@@ -144,13 +148,19 @@ void led_task()
 			} else if (! animations.empty()) {
 				// there are other animation file to handle
 				led_show_infos = led_animation_parse(animations[0].c_str());
+				loop_sequence = tater_led_loops_entire_sequence(led_show_infos);
 				animations.erase(animations.begin());
 				index = 0;
+			} else if (loop_sequence) {
+				// A loop marker before every frame means repeat the complete
+				// animation, not hold its first frame forever.
+				index = tater_led_next_sequence_frame(index, led_show_infos.size());
 			}
 		} else {
 			// INFO("no more led show infos");
 			led_show_infos.clear();
 			index = 0;
+			loop_sequence = false;
 			animations.clear();
 		}
 	}

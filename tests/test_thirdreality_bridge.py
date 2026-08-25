@@ -65,6 +65,13 @@ class BridgeHelpersTest(unittest.TestCase):
             bridge_module.event_animation("connection", {"status": "connected"}),
             ("none.animation", True),
         )
+        self.assertEqual(
+            bridge_module.event_animation(
+                "light_command",
+                {"state": True, "effect": "tool_call"},
+            ),
+            ("tater-tool-call.animation", False),
+        )
 
     def test_atomic_update_preserves_vendor_fields(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -88,6 +95,7 @@ class BridgeHelpersTest(unittest.TestCase):
                         "led_color": "#FF5A1F",
                         "led_listening_animation": "heartbeat",
                         "led_thinking_animation": "directional",
+                        "led_tool_call_animation": "solid",
                     }
                 ),
                 encoding="utf-8",
@@ -97,6 +105,7 @@ class BridgeHelpersTest(unittest.TestCase):
         self.assertEqual(settings["led_color"], "#ff5a1f")
         self.assertEqual(settings["led_listening_animation"], "heartbeat")
         self.assertEqual(settings["led_thinking_animation"], "breathe")
+        self.assertEqual(settings["led_tool_call_animation"], "solid")
 
     def test_animation_only_drives_the_visible_s420_status_light(self) -> None:
         content = bridge_module.animation_text("pulse", "#ff5a1f", 80)
@@ -121,6 +130,7 @@ class BridgeHelpersTest(unittest.TestCase):
                 {
                     "tater-listening.animation",
                     "tater-thinking.animation",
+                    "tater-tool-call.animation",
                     "tater-replying.animation",
                 },
             )
@@ -181,6 +191,23 @@ class BridgeButtonTest(unittest.IsolatedAsyncioTestCase):
         light = next(message for message in self.websocket.messages if message["command"] == "register_light")
         self.assertEqual(light["data"]["name"], "Tater S420 Status Light")
         self.assertNotIn("Ring", light["data"]["name"])
+
+    async def test_tool_call_event_plays_and_remembers_its_generated_animation(self) -> None:
+        with mock.patch.object(bridge_module, "show_animation") as show:
+            await self.bridge.handle_event(
+                json.dumps(
+                    {
+                        "event": "light_command",
+                        "data": {"state": True, "effect": "tool_call"},
+                    }
+                )
+            )
+
+        show.assert_called_once_with("tater-tool-call.animation", False)
+        self.assertEqual(
+            self.bridge.current_led_animation,
+            ("tater-tool-call.animation", False),
+        )
 
 
 if __name__ == "__main__":

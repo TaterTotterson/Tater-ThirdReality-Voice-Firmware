@@ -13,7 +13,7 @@ use `--update` to advance the pin and then rerun CI and hardware tests.
 | Wake sensitivity and TV-nearby profile | Implemented; hardware validation pending | Sensitivity changes the effective microWakeWord threshold; `tv_nearby` admits a more permissive candidate and requires Tater verification with fail-open behavior |
 | STT wake verification | Implemented; hardware validation pending | Observe and enforce modes send the configured 0.5–2 second PCM wake window over the authenticated Tater connection using the shared `TWV1` contract; enforcement rejects false wakes and fails open if verification is unavailable or times out |
 | STT, TTS, tool progress, continued conversation | Ready | Pinned Tater Linux Voice state machine; each response follows Tater's explicit mic-reopen decision rather than a persisted fallback |
-| ThirdReality LEDs | Ready | Local peripheral bridge to the D-Bus LED service |
+| ThirdReality LEDs | Ready | Local peripheral bridge to the D-Bus LED service with configurable animated listening, thinking, tool-call, and replying states |
 | Hardware volume and microphone mute | Ready | Bidirectional `/data/conf/sound.json` synchronization |
 | Home button press-to-talk | Ready | Single press starts or stops the active pipeline |
 | Tater-native media playback | Ready | Single-device music, looping sessions, and ducked TTS overlays from the authenticated Tater server |
@@ -29,11 +29,12 @@ use `--update` to advance the pin and then rerun CI and hardware tests.
 | Synchronized TTS overlays | Implemented; hardware validation pending | Foreground audio is preloaded, scheduled against the same monotonic audible deadline as grouped media, and mixed over a ramp-ducked music player |
 | Audio scenes and looping backgrounds | Implemented; hardware validation pending | Two mpv players provide simultaneous foreground/background playback, looping beds, independent source volumes, duck attack/release, and finish fade |
 | Media underrun recovery | Implemented; hardware validation pending | After cache recovery, the player seeks or reloads at the shared wall-clock timeline and fades back in while reporting underrun/rejoin telemetry |
+| Stalled playback recovery | Implemented; hardware validation pending | A five-second render-clock watchdog stops frozen media, TTS overlays, and audio scenes, clears persistent buffering, and restores music ducking without requiring a reboot |
 | Browser USB factory flashing | Platform constraint | The S420 uses Amlogic's native USB-burn protocol and requires the ThirdReality debug/log board; Tater desktop provides the supported local USB path |
 | Physical-device regression pass | Core path complete | Local USB factory flashing, Tater boot verification, hotspot provisioning, pairing, voice/media playback, and signed OTA have been exercised on physical S420 hardware |
 
 The S420 now advertises the same Tater audio-session v2, audio-scene v1,
-synchronized-overlay, underrun-recovery, and TTS barge-in protocol capabilities
+synchronized-overlay, underrun-recovery, stalled-playback-recovery, and TTS barge-in protocol capabilities
 used by the ESP family. Unit and structural tests cover those paths; continued
 physical S420 regression testing can further refine the new audio-scene,
 scheduled-overlay, recovery, and barge-in behavior. Secure-boot

@@ -16,7 +16,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 from urllib.request import Request, urlopen
 
@@ -71,6 +71,8 @@ _MEDIA_RECOVERY_SEEK_TIMEOUT_SECONDS = 1.5
 _MEDIA_RECOVERY_FADE_SECONDS = 0.12
 _AUDIO_PREPARE_TIMEOUT_SECONDS = 10.0
 _AUDIO_RAMP_STEP_SECONDS = 0.02
+_PLAYBACK_WATCHDOG_INTERVAL_SECONDS = 0.5
+_PLAYBACK_STALL_TIMEOUT_SECONDS = 5.0
 _MEDIA_CHANNELS = {"stereo", "left", "right", "mono"}
 _LED_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
 _LED_ANIMATIONS = {"pulse", "breathe", "heartbeat", "solid"}
@@ -436,6 +438,9 @@ class _MediaSession:
     rejoin_frames: int = 0
     recovering: bool = False
     was_rebuffering: bool = False
+    rebuffer_started_at: float = 0.0
+    last_rendered_frames: int = -1
+    last_render_progress_at: float = 0.0
     prepare_task: Optional[asyncio.Task[None]] = None
     commit_timeout_task: Optional[asyncio.Task[None]] = None
     start_task: Optional[asyncio.Task[None]] = None
@@ -477,6 +482,10 @@ class _AudioScene:
     task: Optional[asyncio.Task[None]] = None
     started: bool = False
     finished: bool = False
+
+
+class _PlaybackStalledError(RuntimeError):
+    """Raised when an active MPV output stops advancing."""
 
 
 class TaterFeatureManager:
@@ -594,8 +603,10 @@ class TaterFeatureManager:
                 _MEDIA_DEFAULT_OUTPUT_LATENCY_FRAMES if self._sync_player_available else 0
             ),
             "media_underrun_recovery": self._sync_player_available,
+            "media_stall_recovery": self._sync_player_available,
             "media_session_start_position": self._sync_player_available,
             "synchronized_tts_overlays": self._sync_overlay_available,
+            "audio_stall_recovery": self._sync_overlay_available,
             "audio_session_version": 2 if self._sync_player_available else 1,
             "audio_scene_version": 1 if self._sync_overlay_available else 0,
             "media_sample_rate_hz": _MEDIA_SAMPLE_RATE_HZ,
@@ -863,6 +874,61 @@ class TaterFeatureManager:
             await asyncio.sleep(0.02)
         raise TimeoutError("audio preparation timed out")
 
+    @staticmethod
+    def _player_rendered_position(snapshot: dict[str, Any]) -> Optional[float]:
+        value = snapshot.get("rendered_position_seconds")
+        if value is None:
+            value = snapshot.get("position_seconds")
+        if value is None:
+            value = snapshot.get("timeline_position_seconds")
+        try:
+            return max(0.0, float(value))
+        except (TypeError, ValueError):
+            return None
+
+    async def _wait_for_playback_completion(
+        self,
+        finished: asyncio.Future[None],
+        players: tuple[tuple[str, Any], ...],
+        is_active: Callable[[], bool],
+    ) -> bool:
+        """Wait for completion while ensuring every active MPV clock advances."""
+        last_positions: dict[int, Optional[float]] = {}
+        last_progress: dict[int, float] = {}
+        started_at = time.monotonic()
+        for _label, player in players:
+            player_id = id(player)
+            snapshot = player.synchronized_snapshot()
+            last_positions[player_id] = self._player_rendered_position(snapshot)
+            last_progress[player_id] = started_at
+
+        while is_active():
+            done, _pending = await asyncio.wait(
+                (finished,),
+                timeout=_PLAYBACK_WATCHDOG_INTERVAL_SECONDS,
+            )
+            if done:
+                await finished
+                return True
+
+            now = time.monotonic()
+            for label, player in players:
+                snapshot = player.synchronized_snapshot()
+                position = self._player_rendered_position(snapshot)
+                player_id = id(player)
+                previous = last_positions[player_id]
+                if position is not None and (previous is None or position != previous):
+                    last_positions[player_id] = position
+                    last_progress[player_id] = now
+                    continue
+                if now - last_progress[player_id] >= _PLAYBACK_STALL_TIMEOUT_SECONDS:
+                    state = "buffering" if _truthy(snapshot.get("rebuffering")) else "rendering"
+                    raise _PlaybackStalledError(
+                        f"{label} remained stalled while {state} for "
+                        f"{_PLAYBACK_STALL_TIMEOUT_SECONDS:g} seconds"
+                    )
+        return False
+
     def _set_music_duck(self, factor: float) -> None:
         self._music_duck_factor = max(0.0, min(1.0, float(factor)))
         if self._music_duck_factor >= 0.999:
@@ -951,6 +1017,18 @@ class TaterFeatureManager:
         message_id = str(body.get("id") or "").strip()
         raw_payload = body.get("payload")
         payload = raw_payload if isinstance(raw_payload, dict) else {}
+
+        if message_type == "voice.event":
+            event_name = str(payload.get("event") or "").strip().upper()
+            if event_name.startswith("VOICE_ASSISTANT_"):
+                event_name = event_name[len("VOICE_ASSISTANT_") :]
+            if event_name == "TOOL_CALL_START":
+                self.satellite._emit(  # pylint: disable=protected-access
+                    LVAEvent.LIGHT_COMMAND,
+                    {"state": True, "effect": "tool_call"},
+                )
+            # The native client must still process the voice event.
+            return False
 
         if message_type == "wake.verify.result":
             self._complete_wake_verification(
@@ -1688,6 +1766,7 @@ class TaterFeatureManager:
             self.state.music_player.resume()
             session.actual_start_us = time.monotonic_ns() // 1000
             session.started = True
+            session.last_render_progress_at = time.monotonic()
             self.media_started_at = session.actual_start_us / 1_000_000.0
             event = {
                 "session_id": session.session_id,
@@ -1714,11 +1793,13 @@ class TaterFeatureManager:
                 if self.media_session is not session:
                     return
                 snapshot = self.state.music_player.synchronized_snapshot()
+                now = time.monotonic()
                 now_us = time.monotonic_ns() // 1000
                 raw_rebuffering = _truthy(snapshot.get("rebuffering"))
                 was_rebuffering = session.was_rebuffering
                 if raw_rebuffering and not session.was_rebuffering:
                     session.underrun_events += 1
+                    session.rebuffer_started_at = now
                 elif (
                     was_rebuffering
                     and not raw_rebuffering
@@ -1728,6 +1809,8 @@ class TaterFeatureManager:
                     session.recovery_task = asyncio.create_task(
                         self._recover_media_timeline(session)
                     )
+                if not raw_rebuffering:
+                    session.rebuffer_started_at = 0.0
                 session.was_rebuffering = raw_rebuffering
                 rebuffering = raw_rebuffering or session.recovering
                 correction_frames = session.correction_frames_since_report
@@ -1740,6 +1823,49 @@ class TaterFeatureManager:
                     max(0.0, float(snapshot.get("rendered_position_seconds") or snapshot.get("position_seconds") or 0.0))
                     * _MEDIA_SAMPLE_RATE_HZ
                 )
+                if session.recovering:
+                    session.last_rendered_frames = rendered_frames
+                    session.last_render_progress_at = now
+                elif session.last_rendered_frames < 0:
+                    session.last_rendered_frames = rendered_frames
+                elif rendered_frames != session.last_rendered_frames:
+                    session.last_rendered_frames = rendered_frames
+                    session.last_render_progress_at = now
+
+                stall_reason = ""
+                if (
+                    raw_rebuffering
+                    and session.rebuffer_started_at > 0.0
+                    and now - session.rebuffer_started_at >= _PLAYBACK_STALL_TIMEOUT_SECONDS
+                ):
+                    stall_reason = (
+                        "media buffering did not recover within "
+                        f"{_PLAYBACK_STALL_TIMEOUT_SECONDS:g} seconds"
+                    )
+                elif (
+                    not raw_rebuffering
+                    and not session.recovering
+                    and session.last_render_progress_at > 0.0
+                    and now - session.last_render_progress_at >= _PLAYBACK_STALL_TIMEOUT_SECONDS
+                ):
+                    stall_reason = (
+                        "rendered media stopped advancing for "
+                        f"{_PLAYBACK_STALL_TIMEOUT_SECONDS:g} seconds"
+                    )
+                if stall_reason:
+                    _LOGGER.warning("Playback watchdog stopped %s: %s", session.session_id, stall_reason)
+                    self._send(
+                        "log",
+                        {
+                            "level": "warn",
+                            "message": (
+                                f"Playback watchdog stopped stalled media {session.session_id}: "
+                                f"{stall_reason}."
+                            ),
+                        },
+                    )
+                    self._stop_media(ok=False)
+                    return
                 if session.latency_learning_samples < _MEDIA_LATENCY_LEARN_SAMPLES:
                     elapsed_frames = int(
                         round(
@@ -1792,6 +1918,15 @@ class TaterFeatureManager:
             return
         except Exception:  # pylint: disable=broad-except
             _LOGGER.exception("Unable to report synchronized media playhead")
+            if self.media_session is session:
+                self._send(
+                    "log",
+                    {
+                        "level": "warn",
+                        "message": "Playback watchdog reset media after its render clock failed.",
+                    },
+                )
+                self._stop_media(ok=False)
 
     async def _recover_media_timeline(self, session: _MediaSession) -> None:
         """Rejoin the shared audible timeline after an mpv cache underrun."""
@@ -2115,7 +2250,16 @@ class TaterFeatureManager:
                     },
                 )
 
-            await playback_finished
+            if self._sync_overlay_available:
+                completed = await self._wait_for_playback_completion(
+                    playback_finished,
+                    (("TTS overlay", self.state.tts_player),),
+                    lambda: self.overlay_session is session,
+                )
+                if not completed:
+                    return
+            else:
+                await playback_finished
             if self.overlay_session is not session:
                 return
             await self._ramp_music_duck(1.0, session.release_ms)
@@ -2134,6 +2278,17 @@ class TaterFeatureManager:
             )
         except asyncio.CancelledError:
             raise
+        except _PlaybackStalledError as exc:
+            _LOGGER.warning("Playback watchdog stopped overlay %s: %s", session.overlay_id, exc)
+            self._send(
+                "log",
+                {
+                    "level": "warn",
+                    "message": f"Playback watchdog reset stalled TTS overlay {session.overlay_id}: {exc}.",
+                },
+            )
+            if self.overlay_session is session:
+                self._finish_overlay_failure(session)
         except Exception:  # pylint: disable=broad-except
             _LOGGER.exception("Unable to play Tater audio overlay")
             if self.overlay_session is session:
@@ -2251,7 +2406,16 @@ class TaterFeatureManager:
                 await self._ramp_music_duck(scene.duck_target, scene.attack_ms)
             self.state.tts_player.resume()
             scene.started = True
-            await foreground_finished
+            watched_players = [("audio-scene speech", self.state.tts_player)]
+            if scene.background_url and scene.background_loop:
+                watched_players.append(("audio-scene background", self.state.music_player))
+            completed = await self._wait_for_playback_completion(
+                foreground_finished,
+                tuple(watched_players),
+                lambda: self.audio_scene is scene,
+            )
+            if not completed:
+                return
             if self.audio_scene is not scene:
                 return
 
@@ -2267,6 +2431,17 @@ class TaterFeatureManager:
             self._send("audio.scene.finished", {"scene_id": scene.scene_id, "ok": True})
         except asyncio.CancelledError:
             raise
+        except _PlaybackStalledError as exc:
+            _LOGGER.warning("Playback watchdog stopped audio scene %s: %s", scene.scene_id, exc)
+            self._send(
+                "log",
+                {
+                    "level": "warn",
+                    "message": f"Playback watchdog reset stalled audio scene {scene.scene_id}: {exc}.",
+                },
+            )
+            if self.audio_scene is scene:
+                self._stop_audio_scene(ok=False)
         except Exception:  # pylint: disable=broad-except
             _LOGGER.exception("Unable to play Tater audio scene")
             if self.audio_scene is scene:

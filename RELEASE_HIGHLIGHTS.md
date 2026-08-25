@@ -1,5 +1,4 @@
-- Adds playback-gated WebRTC echo cancellation using the S420 codec's synchronized speaker loopback, making the wake word easier to hear while the satellite is playing music.
-- Keeps wake detection active during local music regardless of the TTS barge-in setting; TTS interruption continues to follow that setting.
-- Keeps the normal microphone gain and automatically falls back to the previous mono capture path if direct four-channel capture is unavailable.
-- Applies Tater wake sensitivity on-device and adds the verifier-backed, fail-open `tv_nearby` profile for rooms with persistent television speech.
-- Adds a non-recording S420 channel-level diagnostic; the production path uses microphone 0 while microphone 1 remains available for diagnostics rather than uncalibrated beamforming.
+- Adds automatic recovery when synchronized music, a TTS overlay, or an audio scene remains stalled for five seconds, preventing a hung player from leaving the satellite silent until rebooted.
+- Stops persistent buffering cleanly, restores normal music volume after a stalled TTS overlay, and reports the failed session to Tater so the group can recover normally.
+- Fixes pulse, breathe, and heartbeat LED effects so their complete frame sequences animate instead of remaining on the first frame; the solid effect continues to stay steady.
+- Adds the configured tool-call LED state alongside the existing listening, thinking, and replying states, and keeps the active animation when live settings are reapplied.

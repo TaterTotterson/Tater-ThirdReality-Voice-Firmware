@@ -53,6 +53,7 @@ TATER_LED_DEFAULTS: dict[str, Any] = {
     "led_color": "#ff5a1f",
     "led_listening_animation": "pulse",
     "led_thinking_animation": "breathe",
+    "led_tool_call_animation": "heartbeat",
     "led_replying_animation": "pulse",
 }
 TATER_LED_STYLES = {"pulse", "breathe", "heartbeat", "solid"}
@@ -137,6 +138,7 @@ def event_animation(event: str, data: Optional[dict[str, Any]] = None) -> Option
         manual_effects = {
             "listening": "tater-listening.animation",
             "thinking": "tater-thinking.animation",
+            "tool_call": "tater-tool-call.animation",
             "speaking": "tater-replying.animation",
             "alert": "alert.animation",
             "error": "error.animation",
@@ -171,6 +173,7 @@ def read_led_settings(path: Path = LIVE_SETTINGS) -> dict[str, Any]:
     for key in (
         "led_listening_animation",
         "led_thinking_animation",
+        "led_tool_call_animation",
         "led_replying_animation",
     ):
         style = str(value.get(key) or "").strip().lower()
@@ -211,6 +214,7 @@ def write_tater_animations(
     states = {
         "listening": str(settings["led_listening_animation"]),
         "thinking": str(settings["led_thinking_animation"]),
+        "tool-call": str(settings["led_tool_call_animation"]),
         "replying": str(settings["led_replying_animation"]),
     }
     for state, style in states.items():
@@ -300,6 +304,7 @@ class ThirdRealityBridge:
         self.last_muted: Optional[bool] = None
         self.last_led_settings: Optional[dict[str, Any]] = None
         self.current_led_event = "idle"
+        self.current_led_animation: Optional[tuple[str, bool]] = EVENT_ANIMATIONS["idle"]
 
     async def send_command(self, command: str, data: Optional[dict[str, Any]] = None) -> None:
         websocket = self.websocket
@@ -374,6 +379,7 @@ class ThirdRealityBridge:
 
         animation = event_animation(event, payload)
         if animation is not None:
+            self.current_led_animation = animation
             await asyncio.to_thread(show_animation, animation[0], animation[1])
 
     async def hardware_sync_loop(self) -> None:
@@ -389,7 +395,7 @@ class ThirdRealityBridge:
             if led_settings != self.last_led_settings:
                 self.last_led_settings = led_settings
                 await asyncio.to_thread(write_tater_animations, led_settings)
-                animation = event_animation(self.current_led_event)
+                animation = self.current_led_animation or event_animation(self.current_led_event)
                 if animation is not None:
                     await asyncio.to_thread(show_animation, animation[0], animation[1])
             await asyncio.sleep(0.25)
