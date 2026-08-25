@@ -71,10 +71,7 @@ index fc350f9..2ba90da 100644
  std::unique_ptr<ProcessedAudioChunk>
  AudioProcessor::Process10ms(py::bytes audio) {
    auto processed_chunk = std::make_unique<ProcessedAudioChunk>();
-@@ -79,9 +107,12 @@ AudioProcessor::Process10ms(py::bytes audio) {
-   if ((buffer_input.size != BYTES_10_MS) ||
-       (buffer_output.size != BYTES_10_MS)) {
-     throw std::runtime_error(
+@@ -82,6 +110,9 @@ AudioProcessor::Process10ms(py::bytes audio) {
          "Input and output buffers must be 320 bytes (10 ms)");
    }
  
