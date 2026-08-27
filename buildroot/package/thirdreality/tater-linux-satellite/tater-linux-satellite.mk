@@ -5,7 +5,7 @@
 ################################################################################
 
 # Keep this immutable. Use script/update_tater_linux_source.sh to advance it.
-TATER_LINUX_SATELLITE_VERSION = 66a4f8d3d217145feed546507b0360eb781f01da
+TATER_LINUX_SATELLITE_VERSION = beb3ff6a81888e18ab603db3c3d42a3b89692c65
 TATER_LINUX_SATELLITE_SITE = $(call github,TaterTotterson,Tater-Linux-Satellite,$(TATER_LINUX_SATELLITE_VERSION))
 TATER_LINUX_SATELLITE_LICENSE = Apache-2.0
 TATER_LINUX_SATELLITE_LICENSE_FILES = LICENSE

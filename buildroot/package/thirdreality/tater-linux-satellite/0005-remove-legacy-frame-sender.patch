@@ -1,5 +1,14 @@
+From ea7988f85a0835d2aecea5bfe4a4be280401319c Mon Sep 17 00:00:00 2001
+From: Codex Integration <codex@local>
+Date: Thu, 27 Aug 2026 16:54:20 -0500
+Subject: [PATCH] 0005-remove-legacy-frame-sender
+
+---
+ linux_voice_assistant/api_server.py | 14 +++-----------
+ 1 file changed, 3 insertions(+), 11 deletions(-)
+
 diff --git a/linux_voice_assistant/api_server.py b/linux_voice_assistant/api_server.py
-index 4772802..a212893 100644
+index 6c892be..9bbc092 100644
 --- a/linux_voice_assistant/api_server.py
 +++ b/linux_voice_assistant/api_server.py
 @@ -8,7 +8,6 @@ from collections.abc import Iterable
@@ -10,7 +19,7 @@ index 4772802..a212893 100644
  from aioesphomeapi.api_pb2 import (  # type: ignore[attr-defined]
      AuthenticationRequest,
      AuthenticationResponse,
-@@ -83,16 +82,9 @@ class APIServer(asyncio.Protocol):
+@@ -78,16 +77,9 @@ class APIServer(asyncio.Protocol):
              self.send_messages(msgs)
  
      def send_messages(self, msgs: Iterable[message.Message]):
@@ -30,3 +39,6 @@ index 4772802..a212893 100644
  
      def connection_made(self, transport) -> None:
          self._transport = transport
+-- 
+2.46.0
+

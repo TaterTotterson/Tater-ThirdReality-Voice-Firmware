@@ -1,15 +1,17 @@
-From: Tater Native Firmware <tater@local>
-Subject: [PATCH] Add Tater STT wake verification
+From 7ff11c3d5ea55bcfbcb30d9e7dee72879ebb9f38 Mon Sep 17 00:00:00 2001
+From: Codex Integration <codex@local>
+Date: Thu, 27 Aug 2026 16:54:20 -0500
+Subject: [PATCH] 0009-add-tater-stt-wake-verifier
 
-Keep a short rolling microphone window for Tater's STT verifier. Observe mode
-uploads the window without delaying a valid wake, while enforce mode waits for
-Tater's verdict and fails open if verification is unavailable or times out.
+---
+ linux_voice_assistant/satellite.py | 27 ++++++++++++++++++++++++---
+ 1 file changed, 24 insertions(+), 3 deletions(-)
 
 diff --git a/linux_voice_assistant/satellite.py b/linux_voice_assistant/satellite.py
-index cd6a923..aa64220 100644
+index dc19ae1..6b5a6fd 100644
 --- a/linux_voice_assistant/satellite.py
 +++ b/linux_voice_assistant/satellite.py
-@@ -962,6 +962,10 @@ class VoiceSatelliteProtocol(APIConnection):
+@@ -964,6 +964,10 @@ class VoiceSatelliteProtocol(APIServer):
  
      # handle_audio — both channels in ONE message
      def handle_audio(self, audio_chunk: bytes, audio_chunk_2: Optional[bytes] = None) -> None:
@@ -20,19 +22,17 @@ index cd6a923..aa64220 100644
          if not self._is_streaming_audio or self.state.muted:
              return
          if _HAS_AUDIO_DATA2 and audio_chunk_2 is not None:
-@@ -979,6 +983,26 @@ class VoiceSatelliteProtocol(APIConnection):
-             # Don't respond to wake words when muted (voice_assistant.stop behavior)
-             return
+@@ -986,13 +990,30 @@ class VoiceSatelliteProtocol(APIServer):
+             if (not barge_in) or (not self.tts_response_active):
+                 _LOGGER.debug("Ignoring wake word - pipeline already active")
+                 return
+-            _LOGGER.info("Tater wake word interrupted the active TTS response")
+-            self._continue_conversation = False
+-            self.stop()
  
-+        if self._pipeline_active:
-+            barge_in = bool(getattr(self, "_tater_barge_in_enabled", False))
-+            if (not barge_in) or (not self.tts_response_active):
-+                _LOGGER.debug("Ignoring wake word - pipeline already active")
-+                return
-+
-+        wake_word_phrase = wake_word.wake_word  # type: ignore[union-attr]
-+        _LOGGER.debug("Detected wake word: %s", wake_word_phrase)
-+
+         wake_word_phrase = wake_word.wake_word  # type: ignore[union-attr]
+         _LOGGER.debug("Detected wake word: %s", wake_word_phrase)
+ 
 +        features = getattr(self, "_tater_features", None)
 +        if features is not None and features.begin_wake_verification(wake_word_phrase):
 +            _LOGGER.debug("Waiting for Tater STT wake verification")
@@ -44,18 +44,18 @@ index cd6a923..aa64220 100644
 +        if self.state.muted:
 +            return
 +
-         if self._pipeline_active:
-             barge_in = bool(getattr(self, "_tater_barge_in_enabled", False))
-             if (not barge_in) or (not self.tts_response_active):
-@@ -989,9 +1013,6 @@ class VoiceSatelliteProtocol(APIConnection):
-             self._continue_conversation = False
-             self.stop()
- 
--        wake_word_phrase = wake_word.wake_word  # type: ignore[union-attr]
--        _LOGGER.debug("Detected wake word: %s", wake_word_phrase)
--
++        if self._pipeline_active:
++            barge_in = bool(getattr(self, "_tater_barge_in_enabled", False))
++            if (not barge_in) or (not self.tts_response_active):
++                _LOGGER.debug("Ignoring wake word - pipeline already active")
++                return
++            _LOGGER.info("Tater wake word interrupted the active TTS response")
++            self._continue_conversation = False
++            self.stop()
++
          self._timer_finished = False
          self._timer_ring_start = None
          _LOGGER.debug("Stopping timer finished sound")
 -- 
-2.50.1
+2.46.0
+

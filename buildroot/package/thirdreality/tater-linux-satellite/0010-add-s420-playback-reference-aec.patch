@@ -1,17 +1,19 @@
-From: Tater Firmware <firmware@tater.local>
-Subject: [PATCH] add S420 playback-reference AEC
+From d99505ce684573f5ace2d685023f6cb11fe9b2e4 Mon Sep 17 00:00:00 2001
+From: Codex Integration <codex@local>
+Date: Thu, 27 Aug 2026 16:54:20 -0500
+Subject: [PATCH] 0010-add-s420-playback-reference-aec
 
-Use the S420 codec's synchronized four-channel endpoint when configured. Keep
-the original SoundCard input as an automatic fallback, process microphone 0 as
-the production voice channel, and feed the stereo playback loopback to WebRTC
-AEC only while mpv is genuinely rendering local audio. This leaves microphone
-gain unchanged and keeps wake detection independent of the barge-in setting.
+---
+ linux_voice_assistant/__main__.py   | 46 +++++++++++++++++++++++++++--
+ linux_voice_assistant/mpv_player.py |  5 ++++
+ linux_voice_assistant/webrtc.py     | 39 +++++++++++++++++++++---
+ 3 files changed, 83 insertions(+), 7 deletions(-)
 
 diff --git a/linux_voice_assistant/__main__.py b/linux_voice_assistant/__main__.py
-index 6a790b3..44c1603 100644
+index 8bf22ff..4915244 100644
 --- a/linux_voice_assistant/__main__.py
 +++ b/linux_voice_assistant/__main__.py
-@@ -61,6 +61,13 @@ async def main() -> None:
+@@ -62,6 +62,13 @@ async def main() -> None:
          type=int,
          default=1024,
      )
@@ -25,7 +27,7 @@ index 6a790b3..44c1603 100644
      parser.add_argument(
          "--audio-output-device",
          help="Name for the audio output device (see --list-output-devices)",
-@@ -337,7 +344,9 @@ async def main() -> None:
+@@ -338,7 +345,9 @@ async def main() -> None:
      args.download_dir = Path(args.download_dir)
      args.download_dir.mkdir(parents=True, exist_ok=True)
  
@@ -36,7 +38,7 @@ index 6a790b3..44c1603 100644
      if args.audio_input_device is not None:
          try:
              args.audio_input_device = int(args.audio_input_device)
-@@ -348,6 +357,14 @@ async def main() -> None:
+@@ -349,6 +358,14 @@ async def main() -> None:
      else:
          mic = sc.default_microphone()
  
@@ -51,7 +53,7 @@ index 6a790b3..44c1603 100644
      # Load available wake words
      wake_word_dirs = [Path(ww_dir) for ww_dir in args.wake_word_dir]
  
-@@ -575,6 +592,7 @@ def process_audio(
+@@ -591,6 +608,7 @@ def process_audio(
  
      last_active: Optional[float] = None
      webrtc: Optional[WebRTCProcessor] = None
@@ -59,7 +61,7 @@ index 6a790b3..44c1603 100644
  
      try:
          _LOGGER.debug("Opening audio input device: %s", mic.name)
-@@ -582,6 +600,7 @@ def process_audio(
+@@ -598,6 +616,7 @@ def process_audio(
              while not stop_event.is_set():
                  # Shape: (block_size, n_channels) for stereo, (block_size, 1) for mono.
                  raw = mic_in.record(block_size)  # float32, range [-1, 1]
@@ -67,7 +69,7 @@ index 6a790b3..44c1603 100644
                  mic_vol_scalar = max(0.1, min(1.0, state.mic_volume / 100.0))
  
                  # Build per-channel byte arrays.  Channel 0 is the primary
-@@ -598,14 +617,35 @@ def process_audio(
+@@ -614,14 +633,35 @@ def process_audio(
                  agc = state.preferences.mic_auto_gain or 0
                  ns = state.preferences.mic_noise_suppression or 0
  
@@ -106,10 +108,10 @@ index 6a790b3..44c1603 100644
                  if state.satellite is None or not hasattr(state.satellite, "_is_streaming_audio"):
                      continue
 diff --git a/linux_voice_assistant/mpv_player.py b/linux_voice_assistant/mpv_player.py
-index 86cb99b..1ffc556 100644
+index 298d227..d378834 100644
 --- a/linux_voice_assistant/mpv_player.py
 +++ b/linux_voice_assistant/mpv_player.py
-@@ -154,6 +154,11 @@ class MpvMediaPlayer:
+@@ -176,6 +176,11 @@ class MpvMediaPlayer:
          state = self._player.state()
          return state in (PlayerState.PLAYING, PlayerState.PAUSED, PlayerState.LOADING)
  
@@ -122,7 +124,7 @@ index 86cb99b..1ffc556 100644
          """
          Set playback volume.
 diff --git a/linux_voice_assistant/webrtc.py b/linux_voice_assistant/webrtc.py
-index f6e943e..2b9c6a6 100644
+index f6e943e..f7c7cfb 100644
 --- a/linux_voice_assistant/webrtc.py
 +++ b/linux_voice_assistant/webrtc.py
 @@ -7,10 +7,12 @@ class WebRTCProcessor:
@@ -195,4 +197,5 @@ index f6e943e..2b9c6a6 100644
              processed_chunks.append(result.audio)
  
 -- 
-2.50.1
+2.46.0
+

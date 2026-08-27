@@ -1,3 +1,14 @@
+From bc7282fd09d83d31ae71c11a6832af68f35006b8 Mon Sep 17 00:00:00 2001
+From: Codex Integration <codex@local>
+Date: Thu, 27 Aug 2026 16:54:20 -0500
+Subject: [PATCH] 0004-remove-legacy-listener
+
+---
+ linux_voice_assistant/__main__.py | 123 ++++++------------------------
+ 1 file changed, 23 insertions(+), 100 deletions(-)
+
+diff --git a/linux_voice_assistant/__main__.py b/linux_voice_assistant/__main__.py
+index 45645c0..8bf22ff 100644
 --- a/linux_voice_assistant/__main__.py
 +++ b/linux_voice_assistant/__main__.py
 @@ -1,7 +1,6 @@
@@ -8,25 +19,25 @@
  import json
  import logging
  import sys
-@@ -172,16 +171,9 @@
+@@ -173,16 +172,9 @@ async def main() -> None:
          "--network-interface",
          help="Network interface the application listens on (default: auto-detected by gateway)",
      )
 -    # Note that default port is also set in docker-entrypoint.sh
-     parser.add_argument(
+-    parser.add_argument(
 -        "--port",
 -        type=int,
 -        default=6053,
 -        help="Port the application is listening on (default: 6053)",
 -    )
--    parser.add_argument(
+     parser.add_argument(
          "--tater-url",
 -        help="Tater server or native satellite WebSocket URL. Enables outbound Tater-native mode instead of the ESPHome server.",
 +        help="Tater server or native satellite WebSocket URL",
      )
      parser.add_argument(
          "--tater-token",
-@@ -494,82 +486,25 @@
+@@ -509,82 +501,25 @@ async def main() -> None:
          state.peripheral_api = peripheral_api
  
      # ------------------------------------------------------------------
@@ -127,7 +138,7 @@
  
      # ------------------------------------------------------------------
      # Audio processing thread
-@@ -589,13 +524,7 @@
+@@ -604,13 +539,7 @@ async def main() -> None:
          await peripheral_api.start()
          await peripheral_api.emit_event(LVAEvent.CONNECTION, {"status": "getting_started"})
  
@@ -142,7 +153,7 @@
          if args.peripheral_startup_wait > 0:
              _LOGGER.info(
                  "Waiting %.1fs for peripherals to register entities…",
-@@ -604,18 +533,12 @@
+@@ -619,18 +548,12 @@ async def main() -> None:
              await asyncio.sleep(args.peripheral_startup_wait)
  
      try:
@@ -164,3 +175,6 @@
          process_audio_stop_event.set()
          state.audio_queue.put_nowait(None)
          process_audio_thread.join(timeout=3.0)
+-- 
+2.46.0
+

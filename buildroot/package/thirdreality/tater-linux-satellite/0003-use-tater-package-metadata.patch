@@ -1,5 +1,14 @@
+From 5ae54d8fc62c993b6ba9a5bdc2a2417a08b7758c Mon Sep 17 00:00:00 2001
+From: Codex Integration <codex@local>
+Date: Thu, 27 Aug 2026 16:54:20 -0500
+Subject: [PATCH] 0003-use-tater-package-metadata
+
+---
+ pyproject.toml | 15 ++++++---------
+ 1 file changed, 6 insertions(+), 9 deletions(-)
+
 diff --git a/pyproject.toml b/pyproject.toml
-index 5ad2399..38083c0 100644
+index 592e888..28a6fe3 100644
 --- a/pyproject.toml
 +++ b/pyproject.toml
 @@ -1,16 +1,17 @@
@@ -13,8 +22,8 @@ index 5ad2399..38083c0 100644
 +version     = "1.1.13.post1"
  license     = {text = "Apache-2.0"}
 -description = "Linux voice assistant for Tater native satellites and Home Assistant ESPHome"
-+description = "Tater-native Linux voice satellite runtime"
 -readme      = "README.md"
++description = "Tater-native Linux voice satellite runtime"
 +readme      = {text = "Tater-native Linux voice satellite runtime.", content-type = "text/plain"}
  authors     = [
 -    {name = "The Home Assistant Authors", email = "hello@home-assistant.io"}
@@ -25,7 +34,9 @@ index 5ad2399..38083c0 100644
  classifiers = [
      "Development Status :: 3 - Alpha",
      "Intended Audience :: Developers",
-@@ -24,5 +25,4 @@ requires-python = ">=3.11.0"
+@@ -22,7 +23,6 @@ classifiers = [
+ ]
+ requires-python = ">=3.11.0"
  dependencies = [
 -    "aioesphomeapi==45.3.1",
      "netifaces2==0.0.22",
@@ -40,7 +51,7 @@ index 5ad2399..38083c0 100644
  [project.optional-dependencies]
  dev = [
      "black",
-@@ -52,7 +51,6 @@ linux-voice-assistant = "linux_voice_assistant.__main__:run"
+@@ -52,7 +50,6 @@ linux-voice-assistant = "linux_voice_assistant.__main__:run"
  
  [project.urls]
  "Source Code" = "https://github.com/TaterTotterson/Tater-Linux-Satellite"
@@ -48,3 +59,6 @@ index 5ad2399..38083c0 100644
  
  [tool.setuptools]
  platforms = ["any"]
+-- 
+2.46.0
+

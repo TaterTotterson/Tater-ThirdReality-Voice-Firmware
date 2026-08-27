@@ -1,23 +1,20 @@
-From 47dddc107d7c8e233247383213c24348385614f7 Mon Sep 17 00:00:00 2001
-From: Tater Firmware <firmware@tater.local>
-Date: Wed, 5 Aug 2026 12:00:00 -0500
-Subject: [PATCH] add Tater synchronized mpv controls
+From b8567323a79c41cc9f8808b7a26621d79bc99a04 Mon Sep 17 00:00:00 2001
+From: Codex Integration <codex@local>
+Date: Thu, 27 Aug 2026 16:54:20 -0500
+Subject: [PATCH] 0006-add-tater-synchronized-mpv-controls
 
-Expose the small set of libmpv primitives needed by the Tater audio-session
-v2 implementation.  The device-specific session coordinator remains in the
-S420 firmware overlay while the generic player owns mpv access and locking.
 ---
- linux_voice_assistant/mpv_player.py    | 43 ++++++++++++++++
- linux_voice_assistant/player/libmpv.py | 83 ++++++++++++++++++++++++++++-
- 2 files changed, 125 insertions(+), 1 deletion(-)
+ linux_voice_assistant/mpv_player.py    | 43 +++++++++++++
+ linux_voice_assistant/player/libmpv.py | 84 +++++++++++++++++++++++++-
+ 2 files changed, 126 insertions(+), 1 deletion(-)
 
 diff --git a/linux_voice_assistant/mpv_player.py b/linux_voice_assistant/mpv_player.py
-index e821776..4647ba7 100644
+index 386fa35..298d227 100644
 --- a/linux_voice_assistant/mpv_player.py
 +++ b/linux_voice_assistant/mpv_player.py
-@@ -63,6 +63,49 @@ class MpvMediaPlayer:
-         next_url = self._playlist.pop(0)
-         self._player.play(next_url, done_callback=self._on_track_finished, stop_first=stop_first)
+@@ -85,6 +85,49 @@ class MpvMediaPlayer:
+         if event_callback is not None:
+             event_callback("started", "")
  
 +    def prepare_synchronized(
 +        self,
@@ -66,10 +63,10 @@ index e821776..4647ba7 100644
          """Called when a track finishes - plays next or invokes done callback."""
          if self._playlist:
 diff --git a/linux_voice_assistant/player/libmpv.py b/linux_voice_assistant/player/libmpv.py
-index 82e38a6..51aa980 100644
+index b665f8b..7373a5d 100644
 --- a/linux_voice_assistant/player/libmpv.py
 +++ b/linux_voice_assistant/player/libmpv.py
-@@ -1,11 +1,19 @@
+@@ -1,6 +1,6 @@
  import logging
  import threading
 -from typing import Callable, Optional
@@ -77,22 +74,24 @@ index 82e38a6..51aa980 100644
  
  import mpv
  
- from linux_voice_assistant.player.base import AudioPlayer
+@@ -8,6 +8,14 @@ from linux_voice_assistant.player.base import AudioPlayer
  from linux_voice_assistant.player.state import PlayerState
-+
-+
+ 
+ 
 +_TATER_CHANNEL_FILTERS = {
 +    "stereo": "",
 +    "left": "lavfi=[pan=stereo|c0=c0|c1=c0]",
 +    "right": "lavfi=[pan=stereo|c0=c1|c1=c1]",
 +    "mono": "lavfi=[pan=stereo|c0=0.5*c0+0.5*c1|c1=0.5*c0+0.5*c1]",
 +}
- 
- 
++
++
  class LibMpvPlayer(AudioPlayer):
-@@ -83,6 +91,80 @@ class LibMpvPlayer(AudioPlayer):
-         self._mpv.pause = stop_first
-         self._mpv.play(url)
+     """
+     AudioPlayer implementation for Linux Voice Assistant using libmpv.
+@@ -89,6 +97,80 @@ class LibMpvPlayer(AudioPlayer):
+             self._mpv["start"] = max(0.0, float(start_position_ms or 0) / 1000.0)
+             self._mpv["loop-file"] = "inf" if loop else "no"
  
 +    def prepare_synchronized(
 +        self,
@@ -172,4 +171,5 @@ index 82e38a6..51aa980 100644
          """Pause playback."""
          with self._state_lock:
 -- 
-2.50.1
+2.46.0
+
