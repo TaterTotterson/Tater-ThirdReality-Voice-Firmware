@@ -295,6 +295,36 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(cancelled["affected"], 1)
         self.assertFalse(self.manager.timers)
 
+    async def test_timer_keeps_counting_offline_then_rings_and_snoozes(self) -> None:
+        self.manager.handle_message(
+            {
+                "type": "timer.start",
+                "id": "request-start",
+                "payload": {"id": "offline", "duration_ms": 20},
+            }
+        )
+        self.manager.disconnected()
+        await asyncio.sleep(0.06)
+
+        self.assertTrue(self.manager.timers["offline"].ringing)
+        self.assertTrue(self.client.satellite._timer_finished)
+        self.assertEqual(self.client.satellite.events[-1][0], _Event.TIMER_RINGING)
+        timer_events = self._messages("timer.event")
+        self.assertEqual(timer_events[-1]["payload"]["event"], "expired")
+
+        self.manager.handle_message(
+            {
+                "type": "timer.snooze",
+                "id": "request-snooze",
+                "payload": {"id": "offline", "duration_ms": 100},
+            }
+        )
+        self.assertFalse(self.manager.timers["offline"].ringing)
+        self.assertFalse(self.client.satellite._timer_finished)
+        snoozed = self._messages("timer.result")[-1]["payload"]
+        self.assertEqual(snoozed["action"], "snooze")
+        self.assertEqual(snoozed["affected"], 1)
+
     async def test_settings_apply_and_persist(self) -> None:
         self.manager.handle_message(
             {
