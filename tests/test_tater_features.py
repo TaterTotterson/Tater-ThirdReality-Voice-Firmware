@@ -994,6 +994,10 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0)
         session = self.manager.media_session
         self.assertIsNotNone(session)
+        deadline = time.monotonic() + 1.0
+        while not session.started and time.monotonic() < deadline:
+            await asyncio.sleep(0.01)
+        self.assertTrue(session.started)
         session.audible_start_us = (tater_features.time.monotonic_ns() // 1000) - 2_000_000
         self.client.state.music_player.snapshot["position_seconds"] = 0.0
         await self.manager._recover_media_timeline(session)
