@@ -3,16 +3,19 @@ From: Codex Integration <codex@local>
 Date: Thu, 27 Aug 2026 16:54:20 -0500
 Subject: [PATCH] 0006-add-tater-synchronized-mpv-controls
 
+Expose the small set of libmpv primitives needed by the Tater audio-session
+v3 implementation.  The device-specific session coordinator remains in the
+S420 firmware overlay while the generic player owns mpv access and locking.
 ---
- linux_voice_assistant/mpv_player.py    | 43 +++++++++++++
- linux_voice_assistant/player/libmpv.py | 84 +++++++++++++++++++++++++-
- 2 files changed, 126 insertions(+), 1 deletion(-)
+ linux_voice_assistant/mpv_player.py    |  51 +++++++++++++++++
+ linux_voice_assistant/player/libmpv.py | 101 ++++++++++++++++++++++++++++++++-
+ 2 files changed, 151 insertions(+), 1 deletion(-)
 
 diff --git a/linux_voice_assistant/mpv_player.py b/linux_voice_assistant/mpv_player.py
-index 386fa35..298d227 100644
+index 386fa35..50fb307 100644
 --- a/linux_voice_assistant/mpv_player.py
 +++ b/linux_voice_assistant/mpv_player.py
-@@ -85,6 +85,49 @@ class MpvMediaPlayer:
+@@ -85,6 +85,57 @@ class MpvMediaPlayer:
          if event_callback is not None:
              event_callback("started", "")
  
@@ -46,9 +49,17 @@ index 386fa35..298d227 100644
 +        """Seek the prepared media timeline without resuming playback."""
 +        self._player.seek_synchronized(position_seconds)
 +
++    def jump_synchronized(self, delta_seconds: float) -> None:
++        """Move an active synchronized timeline without blocking the caller."""
++        self._player.jump_synchronized(delta_seconds)
++
 +    def set_synchronized_speed(self, speed: float) -> None:
 +        """Apply a tiny temporary rate slew used for drift correction."""
 +        self._player.set_synchronized_speed(speed)
++
++    def resume_synchronized(self) -> None:
++        """Queue a scheduled resume without waiting on MPV's render thread."""
++        self._player.resume_synchronized()
 +
 +    def reset_synchronized(self) -> None:
 +        """Restore normal rate and stereo routing after a Tater session."""
@@ -63,7 +74,7 @@ index 386fa35..298d227 100644
          """Called when a track finishes - plays next or invokes done callback."""
          if self._playlist:
 diff --git a/linux_voice_assistant/player/libmpv.py b/linux_voice_assistant/player/libmpv.py
-index b665f8b..7373a5d 100644
+index b665f8b..4131b28 100644
 --- a/linux_voice_assistant/player/libmpv.py
 +++ b/linux_voice_assistant/player/libmpv.py
 @@ -1,6 +1,6 @@
@@ -89,7 +100,7 @@ index b665f8b..7373a5d 100644
  class LibMpvPlayer(AudioPlayer):
      """
      AudioPlayer implementation for Linux Voice Assistant using libmpv.
-@@ -89,6 +97,80 @@ class LibMpvPlayer(AudioPlayer):
+@@ -89,6 +97,97 @@ class LibMpvPlayer(AudioPlayer):
              self._mpv["start"] = max(0.0, float(start_position_ms or 0) / 1000.0)
              self._mpv["loop-file"] = "inf" if loop else "no"
  
@@ -131,12 +142,14 @@ index b665f8b..7373a5d 100644
 +            rendered_position = self._mpv_property("audio_pts")
 +            position = rendered_position if rendered_position is not None else timeline_position
 +            cache_duration = self._mpv_property("demuxer_cache_duration", 0.0)
++            duration = self._mpv_property("duration", 0.0)
 +            return {
 +                "loaded": position is not None,
 +                "position_seconds": max(0.0, float(position or 0.0)),
 +                "timeline_position_seconds": max(0.0, float(timeline_position or 0.0)),
 +                "rendered_position_seconds": max(0.0, float(position or 0.0)),
 +                "buffered_seconds": max(0.0, float(cache_duration or 0.0)),
++                "duration_seconds": max(0.0, float(duration or 0.0)),
 +                "seeking": bool(self._mpv_property("seeking", False)),
 +                "rebuffering": bool(
 +                    self._mpv_property("paused_for_cache", False)
@@ -154,10 +167,25 @@ index b665f8b..7373a5d 100644
 +                "absolute+exact",
 +            )
 +
++    def jump_synchronized(self, delta_seconds: float) -> None:
++        """Queue a relative exact seek without blocking synchronized control."""
++        with self._state_lock:
++            self._mpv.command_async(
++                "seek",
++                float(delta_seconds),
++                "relative+exact",
++            )
++
 +    def set_synchronized_speed(self, speed: float) -> None:
 +        """Set a narrowly clamped rate for transparent clock correction."""
 +        with self._state_lock:
 +            self._mpv.speed = max(0.995, min(1.005, float(speed)))
++
++    def resume_synchronized(self) -> None:
++        """Queue pause=false so the scheduler never blocks on MPV."""
++        with self._state_lock:
++            self._mpv.command_async("set_property", "pause", False)
++            self._set_state(PlayerState.PLAYING)
 +
 +    def reset_synchronized(self) -> None:
 +        """Restore defaults so ordinary local playback is unaffected."""
@@ -172,4 +200,3 @@ index b665f8b..7373a5d 100644
          with self._state_lock:
 -- 
 2.46.0
-

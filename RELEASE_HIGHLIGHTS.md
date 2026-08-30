@@ -1,4 +1,4 @@
-- Adds automatic recovery when synchronized music, a TTS overlay, or an audio scene remains stalled for five seconds, preventing a hung player from leaving the satellite silent until rebooted.
-- Stops persistent buffering cleanly, restores normal music volume after a stalled TTS overlay, and reports the failed session to Tater so the group can recover normally.
-- Fixes pulse, breathe, and heartbeat LED effects so their complete frame sequences animate instead of remaining on the first frame; the solid effect continues to stay steady.
-- Adds the configured tool-call LED state alongside the existing listening, thinking, and replying states, and keeps the active animation when live settings are reapplied.
+- Improves stereo and synchronized multi-room startup by waiting for MPV to reach a stable, prebuffered state before the satellite reports that it is ready.
+- Moves synchronized playback onto a dedicated monotonic start timer so a busy satellite event loop cannot delay one speaker while another begins playing.
+- Adds audio-session v3 startup realignment support, allowing compatible Tater coordinators to move a late speaker directly onto the shared playback timeline.
+- Keeps the new synchronization behavior compatible with currently released Tater versions; the buffering and start-timer improvements work entirely on the satellite.

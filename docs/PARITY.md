@@ -25,7 +25,7 @@ use `--update` to advance the pin and then rerun CI and hardware tests.
 | Tater setup/reset command | Ready | Clears Wi-Fi and pairing, then reboots into `Tater-Setup-XXXX` |
 | Production-owned secure boot | Platform constraint | SWUpdate is rekeyed, but the proprietary Amlogic boot-FIP root remains owned by ThirdReality |
 | Barge-in while TTS is playing | Implemented; hardware validation pending | Disabled by default; when enabled in Tater, a wake word cancels active TTS without opening a second pipeline during other states |
-| Synchronized stereo and multi-room | Ready | Audio-session v2 preload/commit, left/right/mono routing, 48 kHz rendered-playhead telemetry, and mpv rate-slew drift correction have been exercised on physical mixed-device groups |
+| Synchronized stereo and multi-room | Implemented; audio-session v3 hardware validation pending | Audio-session v3 adds stable-buffer preload/commit, monotonic scheduled starts, and startup realignment to the physically exercised left/right/mono routing, 48 kHz rendered-playhead telemetry, and mpv rate-slew drift correction paths |
 | Synchronized TTS overlays | Implemented; hardware validation pending | Foreground audio is preloaded, scheduled against the same monotonic audible deadline as grouped media, and mixed over a ramp-ducked music player |
 | Audio scenes and looping backgrounds | Implemented; hardware validation pending | Two mpv players provide simultaneous foreground/background playback, looping beds, independent source volumes, duck attack/release, and finish fade |
 | Media underrun recovery | Implemented; hardware validation pending | After cache recovery, the player seeks or reloads at the shared wall-clock timeline and fades back in while reporting underrun/rejoin telemetry |
@@ -33,10 +33,10 @@ use `--update` to advance the pin and then rerun CI and hardware tests.
 | Browser USB factory flashing | Platform constraint | The S420 uses Amlogic's native USB-burn protocol and requires the ThirdReality debug/log board; Tater desktop provides the supported local USB path |
 | Physical-device regression pass | Core path complete | Local USB factory flashing, Tater boot verification, hotspot provisioning, pairing, voice/media playback, and signed OTA have been exercised on physical S420 hardware |
 
-The S420 now advertises the same Tater audio-session v2, audio-scene v1,
+The S420 now advertises the Tater audio-session v3, audio-scene v1,
 synchronized-overlay, underrun-recovery, stalled-playback-recovery, and TTS barge-in protocol capabilities
-used by the ESP family. Unit and structural tests cover those paths; continued
-physical S420 regression testing can further refine the new audio-scene,
+used by the ESP family. Unit and structural tests cover those paths; physical
+S420 regression testing is still required for audio-session v3 and can further refine the audio-scene,
 scheduled-overlay, recovery, and barge-in behavior. Secure-boot
 ownership and browser-based factory flashing remain Amlogic/platform limits,
 not missing Tater application features.

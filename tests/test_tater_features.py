@@ -8,6 +8,7 @@ from pathlib import Path
 import struct
 import sys
 import tempfile
+import time
 import types
 import unittest
 from unittest import mock
@@ -70,6 +71,7 @@ class _Player:
             "loaded": True,
             "position_seconds": 0.0,
             "buffered_seconds": 2.0,
+            "duration_seconds": 5.0,
             "seeking": False,
             "rebuffering": False,
             "paused": False,
@@ -79,6 +81,7 @@ class _Player:
         self.resume_count = 0
         self.pause_count = 0
         self.stop_count = 0
+        self.jumps = []
 
     def set_volume(self, value):
         self.volume = value
@@ -98,6 +101,10 @@ class _Player:
     def seek_synchronized(self, position_seconds):
         self.snapshot["position_seconds"] = position_seconds
 
+    def jump_synchronized(self, delta_seconds):
+        self.jumps.append(delta_seconds)
+        self.snapshot["position_seconds"] += delta_seconds
+
     def set_synchronized_speed(self, speed):
         self.speed = speed
         self.snapshot["speed"] = speed
@@ -109,6 +116,9 @@ class _Player:
     def resume(self):
         self.resume_count += 1
         self.snapshot["paused"] = False
+
+    def resume_synchronized(self):
+        self.resume()
 
     def pause(self):
         self.pause_count += 1
@@ -241,7 +251,7 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
     def _messages(self, message_type):
         return [frame for frame in self.client.frames if frame["type"] == message_type]
 
-    async def test_capabilities_claim_tater_audio_session_v2(self) -> None:
+    async def test_capabilities_claim_tater_audio_session_v3(self) -> None:
         self.assertTrue(self.manager.capabilities["timers"])
         self.assertTrue(self.manager.capabilities["ota"])
         self.assertTrue(self.manager.capabilities["live_settings"])
@@ -252,6 +262,7 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.manager.capabilities["media_playhead_telemetry"])
         self.assertTrue(self.manager.capabilities["media_drift_correction"])
         self.assertTrue(self.manager.capabilities["media_rate_slew"])
+        self.assertTrue(self.manager.capabilities["media_startup_realign"])
         self.assertTrue(self.manager.capabilities["media_render_clock"])
         self.assertTrue(self.manager.capabilities["media_underrun_recovery"])
         self.assertTrue(self.manager.capabilities["media_stall_recovery"])
@@ -266,7 +277,7 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.manager.capabilities["wake_during_playback"])
         self.assertTrue(self.manager.capabilities["playback_reference_aec"])
         self.assertEqual(self.manager.capabilities["media_output_latency_frames"], 6144)
-        self.assertEqual(self.manager.capabilities["audio_session_version"], 2)
+        self.assertEqual(self.manager.capabilities["audio_session_version"], 3)
         self.assertEqual(self.manager.capabilities["audio_scene_version"], 1)
 
     async def test_timer_start_list_and_cancel_round_trip(self) -> None:
@@ -1237,6 +1248,62 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
         finally:
             tater_features._MEDIA_PLAYHEAD_INTERVAL_SECONDS = original_interval
 
+    async def test_synchronized_prepare_waits_for_a_stable_primed_buffer(self) -> None:
+        self.client.state.music_player.snapshot["buffered_seconds"] = 0.0
+        self.manager.handle_message(
+            {
+                "type": "media.session.prepare",
+                "id": "prepare-primed",
+                "payload": {
+                    "session_id": "primed-session",
+                    "group_id": "office-pair",
+                    "media": {"url": "https://tater.test/reply.wav"},
+                    "routing": {"channel": "mono"},
+                },
+            }
+        )
+        await asyncio.sleep(0.03)
+        self.assertFalse(self._messages("media.session.prepare.result"))
+
+        self.client.state.music_player.snapshot["buffered_seconds"] = 0.5
+        await asyncio.sleep(0.06)
+        prepared = self._messages("media.session.prepare.result")[-1]["payload"]
+        self.assertTrue(prepared["ok"])
+        self.assertGreaterEqual(prepared["buffered_frames"], 24000)
+
+    async def test_synchronized_start_timer_is_independent_of_asyncio_stalls(self) -> None:
+        self.manager.handle_message(
+            {
+                "type": "media.session.prepare",
+                "id": "prepare-timer",
+                "payload": {
+                    "session_id": "timer-session",
+                    "group_id": "office-pair",
+                    "media": {"url": "https://tater.test/reply.wav"},
+                    "routing": {"channel": "mono"},
+                },
+            }
+        )
+        await asyncio.sleep(0.06)
+        start_at_us = (tater_features.time.monotonic_ns() // 1000) + 30_000
+        self.manager.handle_message(
+            {
+                "type": "media.session.commit",
+                "id": "commit-timer",
+                "payload": {
+                    "session_id": "timer-session",
+                    "group_id": "office-pair",
+                    "start_at_us": start_at_us,
+                },
+            }
+        )
+
+        time.sleep(0.08)
+        self.assertEqual(self.client.state.music_player.resume_count, 1)
+        await asyncio.sleep(0)
+        started = self._messages("media.session.started")[-1]["payload"]
+        self.assertLess(abs(started["actual_start_us"] - start_at_us), 50_000)
+
     async def test_synchronized_media_rate_slew_is_applied_and_reset(self) -> None:
         self.manager.handle_message(
             {
@@ -1267,6 +1334,34 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(self.client.state.music_player.speed, 1.0)
         await asyncio.sleep(0.12)
         self.assertEqual(self.client.state.music_player.speed, 1.0)
+
+    async def test_synchronized_media_startup_jump_is_applied_immediately(self) -> None:
+        self.manager.handle_message(
+            {
+                "type": "media.session.start",
+                "id": "media-jump-request",
+                "payload": {
+                    "session_id": "session-jump",
+                    "media": {"url": "https://tater.test/reply.wav"},
+                },
+            }
+        )
+        await asyncio.sleep(0.03)
+        self.manager.handle_message(
+            {
+                "type": "media.session.adjust",
+                "id": "adjust-jump-request",
+                "payload": {
+                    "session_id": "session-jump",
+                    "correction_frames": 24000,
+                    "mode": "jump",
+                },
+            }
+        )
+        adjusted = self._messages("media.session.adjust.result")[-1]["payload"]
+        self.assertTrue(adjusted["ok"])
+        self.assertEqual(adjusted["mode"], "jump")
+        self.assertEqual(self.client.state.music_player.jumps, [0.5])
 
     async def test_commit_without_prepared_session_is_rejected(self) -> None:
         self.manager.handle_message(

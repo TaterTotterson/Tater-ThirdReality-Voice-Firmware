@@ -60,6 +60,8 @@ _WAKE_SENSITIVITIES = {"low", "normal", "high", "very_high"}
 _WAKE_ENVIRONMENTS = {"far_field", "balanced", "strict", "tv_nearby"}
 _MEDIA_SAMPLE_RATE_HZ = 48000
 _MEDIA_PREPARE_TIMEOUT_SECONDS = 60.0
+_MEDIA_PREPARE_MIN_BUFFER_SECONDS = 0.20
+_MEDIA_PREPARE_STABLE_SAMPLES = 2
 _MEDIA_COMMIT_TIMEOUT_SECONDS = 30.0
 _MEDIA_PLAYHEAD_INTERVAL_SECONDS = 1.0
 _MEDIA_DEFAULT_OUTPUT_LATENCY_FRAMES = 6144
@@ -443,7 +445,7 @@ class _MediaSession:
     last_render_progress_at: float = 0.0
     prepare_task: Optional[asyncio.Task[None]] = None
     commit_timeout_task: Optional[asyncio.Task[None]] = None
-    start_task: Optional[asyncio.Task[None]] = None
+    start_timer: Optional[threading.Timer] = None
     playhead_task: Optional[asyncio.Task[None]] = None
     adjust_task: Optional[asyncio.Task[None]] = None
     recovery_task: Optional[asyncio.Task[None]] = None
@@ -513,9 +515,10 @@ class TaterFeatureManager:
                     "prepare_synchronized",
                     "synchronized_snapshot",
                     "seek_synchronized",
+                    "jump_synchronized",
                     "set_synchronized_speed",
                     "reset_synchronized",
-                    "resume",
+                    "resume_synchronized",
                 )
             )
         )
@@ -598,6 +601,7 @@ class TaterFeatureManager:
             "media_playhead_telemetry": self._sync_player_available,
             "media_drift_correction": self._sync_player_available,
             "media_rate_slew": self._sync_player_available,
+            "media_startup_realign": self._sync_player_available,
             "media_render_clock": self._sync_player_available,
             "media_output_latency_frames": (
                 _MEDIA_DEFAULT_OUTPUT_LATENCY_FRAMES if self._sync_player_available else 0
@@ -607,7 +611,7 @@ class TaterFeatureManager:
             "media_session_start_position": self._sync_player_available,
             "synchronized_tts_overlays": self._sync_overlay_available,
             "audio_stall_recovery": self._sync_overlay_available,
-            "audio_session_version": 2 if self._sync_player_available else 1,
+            "audio_session_version": 3 if self._sync_player_available else 1,
             "audio_scene_version": 1 if self._sync_overlay_available else 0,
             "media_sample_rate_hz": _MEDIA_SAMPLE_RATE_HZ,
         }
@@ -1634,6 +1638,7 @@ class TaterFeatureManager:
     async def _await_media_ready(self, session: _MediaSession) -> None:
         deadline = time.monotonic() + _MEDIA_PREPARE_TIMEOUT_SECONDS
         seek_applied = session.start_position_ms <= 0
+        stable_ready_samples = 0
         try:
             while self.media_session is session and time.monotonic() < deadline:
                 snapshot = self.state.music_player.synchronized_snapshot()
@@ -1646,13 +1651,41 @@ class TaterFeatureManager:
                     await asyncio.sleep(0.02)
                     continue
                 if _truthy(snapshot.get("seeking")):
+                    stable_ready_samples = 0
                     await asyncio.sleep(0.01)
+                    continue
+
+                buffered_seconds = max(
+                    0.0,
+                    float(snapshot.get("buffered_seconds") or 0.0),
+                )
+                duration_seconds = max(
+                    0.0,
+                    float(snapshot.get("duration_seconds") or 0.0),
+                )
+                required_buffer_seconds = min(
+                    _MEDIA_PREPARE_MIN_BUFFER_SECONDS,
+                    duration_seconds or _MEDIA_PREPARE_MIN_BUFFER_SECONDS,
+                )
+                player_primed = bool(
+                    _truthy(snapshot.get("paused"))
+                    and buffered_seconds >= required_buffer_seconds
+                )
+                if session.prepare_requested and not player_primed:
+                    stable_ready_samples = 0
+                    await asyncio.sleep(0.02)
+                    continue
+                stable_ready_samples += 1
+                if (
+                    session.prepare_requested
+                    and stable_ready_samples < _MEDIA_PREPARE_STABLE_SAMPLES
+                ):
+                    await asyncio.sleep(0.02)
                     continue
 
                 session.prepared = True
                 buffered_frames = int(
-                    max(0.0, float(snapshot.get("buffered_seconds") or 0.0))
-                    * _MEDIA_SAMPLE_RATE_HZ
+                    buffered_seconds * _MEDIA_SAMPLE_RATE_HZ
                 )
                 ready = {
                     "reply_to": session.reply_to,
@@ -1747,24 +1780,44 @@ class TaterFeatureManager:
         if session.commit_timeout_task is not None:
             session.commit_timeout_task.cancel()
             session.commit_timeout_task = None
-        session.start_task = asyncio.create_task(self._run_media_start(session))
+        delay_seconds = max(
+            0.0,
+            (session.scheduled_start_us - (time.monotonic_ns() // 1000))
+            / 1_000_000.0,
+        )
+        session.start_timer = threading.Timer(
+            delay_seconds,
+            self._run_media_start_timer,
+            args=(session,),
+        )
+        session.start_timer.daemon = True
+        session.start_timer.start()
 
-    async def _run_media_start(self, session: _MediaSession) -> None:
+    def _run_media_start_timer(self, session: _MediaSession) -> None:
+        """Queue MPV resume from a dedicated monotonic timer, outside asyncio stalls."""
         try:
-            while self.media_session is session:
-                remaining = session.scheduled_start_us - (time.monotonic_ns() // 1000)
-                if remaining <= 0:
-                    break
-                if remaining > 20_000:
-                    await asyncio.sleep((remaining - 10_000) / 1_000_000.0)
-                elif remaining > 1_000:
-                    await asyncio.sleep(0.001)
-                else:
-                    await asyncio.sleep(0)
             if self.media_session is not session:
                 return
-            self.state.music_player.resume()
-            session.actual_start_us = time.monotonic_ns() // 1000
+            self.state.music_player.resume_synchronized()
+            actual_start_us = time.monotonic_ns() // 1000
+            self._call_soon(
+                self._complete_media_start,
+                session,
+                actual_start_us,
+            )
+        except Exception:  # pylint: disable=broad-except
+            _LOGGER.exception("Unable to queue synchronized media start")
+            self._call_soon(self._fail_scheduled_media_start, session)
+
+    def _complete_media_start(
+        self,
+        session: _MediaSession,
+        actual_start_us: int,
+    ) -> None:
+        if self.media_session is not session:
+            return
+        try:
+            session.actual_start_us = actual_start_us
             session.started = True
             session.last_render_progress_at = time.monotonic()
             self.media_started_at = session.actual_start_us / 1_000_000.0
@@ -1779,12 +1832,14 @@ class TaterFeatureManager:
             }
             self._send("media.session.started", event)
             session.playhead_task = asyncio.create_task(self._report_media_playhead(session))
-        except asyncio.CancelledError:
-            raise
         except Exception:  # pylint: disable=broad-except
             _LOGGER.exception("Unable to start synchronized media")
             if self.media_session is session:
                 self._stop_media(ok=False)
+
+    def _fail_scheduled_media_start(self, session: _MediaSession) -> None:
+        if self.media_session is session:
+            self._stop_media(ok=False)
 
     async def _report_media_playhead(self, session: _MediaSession) -> None:
         try:
@@ -2045,7 +2100,12 @@ class TaterFeatureManager:
     def _adjust_media(self, payload: dict[str, Any], reply_to: str) -> None:
         session = self.media_session
         requested_id = str(payload.get("session_id") or "").strip()
-        correction_frames = _signed_integer(payload.get("correction_frames"), limit=480)
+        mode = str(payload.get("mode") or "slew").strip().lower()
+        correction_limit = _MEDIA_SAMPLE_RATE_HZ * 2 if mode == "jump" else 480
+        correction_frames = _signed_integer(
+            payload.get("correction_frames"),
+            limit=correction_limit,
+        )
         ok = bool(
             self._sync_player_available
             and session is not None
@@ -2054,6 +2114,23 @@ class TaterFeatureManager:
         )
         if not ok or session is None:
             self._send("media.session.adjust.result", {"reply_to": reply_to, "ok": False, "error": "session not found"})
+            return
+        if mode == "jump":
+            self.state.music_player.jump_synchronized(
+                correction_frames / float(_MEDIA_SAMPLE_RATE_HZ)
+            )
+            session.correction_frames_since_report += correction_frames
+            self._send(
+                "media.session.adjust.result",
+                {
+                    "reply_to": reply_to,
+                    "ok": True,
+                    "session_id": session.session_id,
+                    "correction_frames": correction_frames,
+                    "settle_ms": 0,
+                    "mode": "jump",
+                },
+            )
             return
         settle_ms = _integer(payload.get("settle_ms"), 1000, minimum=100, maximum=10000)
         if session.adjust_task is not None:
@@ -2096,13 +2173,15 @@ class TaterFeatureManager:
         for task in (
             session.prepare_task,
             session.commit_timeout_task,
-            session.start_task,
             session.playhead_task,
             session.adjust_task,
             session.recovery_task,
         ):
             if task is not None and task is not current and not task.done():
                 task.cancel()
+        if session.start_timer is not None:
+            session.start_timer.cancel()
+            session.start_timer = None
 
     def _media_finished(self, session_id: str, group_id: str, ok: bool) -> None:
         session = self.media_session

@@ -324,6 +324,7 @@ def main() -> int:
         "media_drift_correction",
         "media_rate_slew",
         "media_render_clock",
+        "media_startup_realign",
     ):
         require(
             f'"{capability}": self._sync_player_available' in tater_features,
@@ -331,8 +332,8 @@ def main() -> int:
             errors,
         )
     require(
-        '"audio_session_version": 2 if self._sync_player_available else 1' in tater_features,
-        "Tater audio-session v2 is not advertised with the synchronized player",
+        '"audio_session_version": 3 if self._sync_player_available else 1' in tater_features,
+        "Tater audio-session v3 is not advertised with the synchronized player",
         errors,
     )
     for capability in (
