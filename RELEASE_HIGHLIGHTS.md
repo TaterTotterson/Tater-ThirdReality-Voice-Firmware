@@ -1,4 +1,4 @@
-- Improves stereo and synchronized multi-room startup by waiting for MPV to reach a stable, prebuffered state before the satellite reports that it is ready.
-- Moves synchronized playback onto a dedicated monotonic start timer so a busy satellite event loop cannot delay one speaker while another begins playing.
-- Adds audio-session v3 startup realignment support, allowing compatible Tater coordinators to move a late speaker directly onto the shared playback timeline.
-- Keeps the new synchronization behavior compatible with currently released Tater versions; the buffering and start-timer improvements work entirely on the satellite.
+- Releases ThirdReality S420 firmware `0.2.12` with restored reply and synchronized music playback.
+- Treats MPV's loaded cache as ready when optional duration/byte cache metrics are unavailable, fixing the `0.2.11` regression where prepared audio could remain silent.
+- Keeps the stable prebuffer gate, monotonic synchronized start timer, and startup realignment introduced in `0.2.11`.
+- Preserves Tater's existing stereo, Music Core, and multi-room synchronization protocol without requiring a Tater server update.

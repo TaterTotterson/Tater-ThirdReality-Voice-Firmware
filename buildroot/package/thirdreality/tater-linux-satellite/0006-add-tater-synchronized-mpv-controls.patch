@@ -8,8 +8,8 @@ v3 implementation.  The device-specific session coordinator remains in the
 S420 firmware overlay while the generic player owns mpv access and locking.
 ---
  linux_voice_assistant/mpv_player.py    |  51 +++++++++++++++++
- linux_voice_assistant/player/libmpv.py | 101 ++++++++++++++++++++++++++++++++-
- 2 files changed, 151 insertions(+), 1 deletion(-)
+ linux_voice_assistant/player/libmpv.py | 108 +++++++++++++++++++++++++++++++++-
+ 2 files changed, 158 insertions(+), 1 deletion(-)
 
 diff --git a/linux_voice_assistant/mpv_player.py b/linux_voice_assistant/mpv_player.py
 index 386fa35..50fb307 100644
@@ -100,7 +100,7 @@ index b665f8b..4131b28 100644
  class LibMpvPlayer(AudioPlayer):
      """
      AudioPlayer implementation for Linux Voice Assistant using libmpv.
-@@ -89,6 +97,97 @@ class LibMpvPlayer(AudioPlayer):
+@@ -89,6 +97,104 @@ class LibMpvPlayer(AudioPlayer):
              self._mpv["start"] = max(0.0, float(start_position_ms or 0) / 1000.0)
              self._mpv["loop-file"] = "inf" if loop else "no"
  
@@ -141,14 +141,21 @@ index b665f8b..4131b28 100644
 +            timeline_position = self._mpv_property("time_pos")
 +            rendered_position = self._mpv_property("audio_pts")
 +            position = rendered_position if rendered_position is not None else timeline_position
-+            cache_duration = self._mpv_property("demuxer_cache_duration", 0.0)
++            raw_cache_duration = self._mpv_property("demuxer_cache_duration")
++            cache_duration = max(0.0, float(raw_cache_duration or 0.0))
 +            duration = self._mpv_property("duration", 0.0)
 +            return {
 +                "loaded": position is not None,
 +                "position_seconds": max(0.0, float(position or 0.0)),
 +                "timeline_position_seconds": max(0.0, float(timeline_position or 0.0)),
 +                "rendered_position_seconds": max(0.0, float(position or 0.0)),
-+                "buffered_seconds": max(0.0, float(cache_duration or 0.0)),
++                "buffered_seconds": cache_duration,
++                # mpv commonly leaves this at zero for a fully downloaded
++                # short HTTP WAV. Treat zero as unavailable so firmware can
++                # use its stable loaded+paused fallback instead of deadlocking.
++                "buffered_seconds_known": bool(
++                    raw_cache_duration is not None and cache_duration > 0.0
++                ),
 +                "duration_seconds": max(0.0, float(duration or 0.0)),
 +                "seeking": bool(self._mpv_property("seeking", False)),
 +                "rebuffering": bool(

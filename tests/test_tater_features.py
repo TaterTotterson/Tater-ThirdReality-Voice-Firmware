@@ -71,6 +71,7 @@ class _Player:
             "loaded": True,
             "position_seconds": 0.0,
             "buffered_seconds": 2.0,
+            "buffered_seconds_known": True,
             "duration_seconds": 5.0,
             "seeking": False,
             "rebuffering": False,
@@ -1274,6 +1275,34 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
         prepared = self._messages("media.session.prepare.result")[-1]["payload"]
         self.assertTrue(prepared["ok"])
         self.assertGreaterEqual(prepared["buffered_frames"], 24000)
+
+    async def test_synchronized_prepare_accepts_short_wav_without_cache_metric(self) -> None:
+        self.client.state.music_player.snapshot.update(
+            {
+                "buffered_seconds": 0.0,
+                "buffered_seconds_known": False,
+                "duration_seconds": 0.35,
+                "paused": True,
+            }
+        )
+        self.manager.handle_message(
+            {
+                "type": "media.session.prepare",
+                "id": "prepare-short-wav",
+                "payload": {
+                    "session_id": "short-wav-session",
+                    "group_id": "office-pair",
+                    "media": {"url": "https://tater.test/reply.wav"},
+                    "routing": {"channel": "mono"},
+                },
+            }
+        )
+
+        await asyncio.sleep(0.06)
+        prepared = self._messages("media.session.prepare.result")[-1]["payload"]
+        self.assertTrue(prepared["ok"])
+        self.assertEqual(prepared["session_id"], "short-wav-session")
+        self.assertEqual(prepared["buffered_frames"], 0)
 
     async def test_synchronized_start_timer_is_independent_of_asyncio_stalls(self) -> None:
         self.manager.handle_message(

@@ -1659,6 +1659,9 @@ class TaterFeatureManager:
                     0.0,
                     float(snapshot.get("buffered_seconds") or 0.0),
                 )
+                buffered_seconds_known = _truthy(
+                    snapshot.get("buffered_seconds_known")
+                )
                 duration_seconds = max(
                     0.0,
                     float(snapshot.get("duration_seconds") or 0.0),
@@ -1669,7 +1672,10 @@ class TaterFeatureManager:
                 )
                 player_primed = bool(
                     _truthy(snapshot.get("paused"))
-                    and buffered_seconds >= required_buffer_seconds
+                    and (
+                        not buffered_seconds_known
+                        or buffered_seconds >= required_buffer_seconds
+                    )
                 )
                 if session.prepare_requested and not player_primed:
                     stable_ready_samples = 0
