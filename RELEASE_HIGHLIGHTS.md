@@ -1,4 +1,4 @@
-- Releases ThirdReality S420 firmware `0.2.12` with restored reply and synchronized music playback.
-- Treats MPV's loaded cache as ready when optional duration/byte cache metrics are unavailable, fixing the `0.2.11` regression where prepared audio could remain silent.
-- Keeps the stable prebuffer gate, monotonic synchronized start timer, and startup realignment introduced in `0.2.11`.
-- Preserves Tater's existing stereo, Music Core, and multi-room synchronization protocol without requiring a Tater server update.
+- Releases ThirdReality S420 firmware `0.2.13` with restored stereo-pair and synchronized group playback.
+- Fixes the `0.2.11` regression where both S420 members prepared and accepted a synchronized session but aborted together at the scheduled start.
+- Keeps the dedicated monotonic start timer for accurate pairing while using the proven S420 MPV resume path instead of the failing asynchronous command.
+- Reports any future scheduled-start failure through Tater device logs while preserving ordinary single-speaker playback and the existing stereo protocol.

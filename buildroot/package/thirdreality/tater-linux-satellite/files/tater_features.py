@@ -1800,20 +1800,29 @@ class TaterFeatureManager:
         session.start_timer.start()
 
     def _run_media_start_timer(self, session: _MediaSession) -> None:
-        """Queue MPV resume from a dedicated monotonic timer, outside asyncio stalls."""
+        """Resume MPV from a dedicated monotonic timer, outside asyncio stalls."""
         try:
             if self.media_session is not session:
                 return
-            self.state.music_player.resume_synchronized()
+            # The normal MPV resume path is synchronous and already proven on
+            # the S420. Running it on this dedicated timer thread keeps the
+            # asyncio loop out of the start deadline without relying on
+            # python-mpv's asynchronous command path, which can reject the
+            # pause transition on this runtime and abort both stereo members.
+            self.state.music_player.resume()
             actual_start_us = time.monotonic_ns() // 1000
             self._call_soon(
                 self._complete_media_start,
                 session,
                 actual_start_us,
             )
-        except Exception:  # pylint: disable=broad-except
+        except Exception as exc:  # pylint: disable=broad-except
             _LOGGER.exception("Unable to queue synchronized media start")
-            self._call_soon(self._fail_scheduled_media_start, session)
+            self._call_soon(
+                self._fail_scheduled_media_start,
+                session,
+                str(exc) or type(exc).__name__,
+            )
 
     def _complete_media_start(
         self,
@@ -1843,8 +1852,15 @@ class TaterFeatureManager:
             if self.media_session is session:
                 self._stop_media(ok=False)
 
-    def _fail_scheduled_media_start(self, session: _MediaSession) -> None:
+    def _fail_scheduled_media_start(self, session: _MediaSession, error: str) -> None:
         if self.media_session is session:
+            self._send(
+                "log",
+                {
+                    "level": "warn",
+                    "message": f"Synchronized media could not start: {error}.",
+                },
+            )
             self._stop_media(ok=False)
 
     async def _report_media_playhead(self, session: _MediaSession) -> None:

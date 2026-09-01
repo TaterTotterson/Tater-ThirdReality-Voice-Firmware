@@ -80,6 +80,7 @@ class _Player:
         }
         self.speed = 1.0
         self.resume_count = 0
+        self.synchronized_resume_count = 0
         self.pause_count = 0
         self.stop_count = 0
         self.jumps = []
@@ -119,7 +120,8 @@ class _Player:
         self.snapshot["paused"] = False
 
     def resume_synchronized(self):
-        self.resume()
+        self.synchronized_resume_count += 1
+        raise RuntimeError("S420 python-mpv async resume is unavailable")
 
     def pause(self):
         self.pause_count += 1
@@ -1333,6 +1335,10 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
 
         time.sleep(0.08)
         self.assertEqual(self.client.state.music_player.resume_count, 1)
+        self.assertEqual(
+            self.client.state.music_player.synchronized_resume_count,
+            0,
+        )
         await asyncio.sleep(0)
         started = self._messages("media.session.started")[-1]["payload"]
         self.assertLess(abs(started["actual_start_us"] - start_at_us), 50_000)
