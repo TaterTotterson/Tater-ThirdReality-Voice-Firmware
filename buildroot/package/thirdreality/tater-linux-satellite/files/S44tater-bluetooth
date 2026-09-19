@@ -1,0 +1,61 @@
+#!/bin/sh
+
+PIDDIR=/var/run/thirdreality
+PIDFILE=$PIDDIR/tater-bluetooth.pid
+PATCHRAM=/usr/bin/brcm_patchram_plus
+FIRMWARE=/etc/bluetooth/bcm4343a1.hcd
+UART=/dev/ttyS1
+
+is_running() {
+    [ -s "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null
+}
+
+start_bluetooth() {
+    is_running && return 0
+    mkdir -p "$PIDDIR"
+    rm -f "$PIDFILE"
+
+    if [ ! -x "$PATCHRAM" ] || [ ! -r "$FIRMWARE" ] || [ ! -c "$UART" ]; then
+        echo "Tater BLE controller prerequisites are missing"
+        return 1
+    fi
+
+    # The vendor aml-bt driver exposes the controller through rfkill0.
+    if [ -w /sys/class/rfkill/rfkill0/state ]; then
+        echo 0 > /sys/class/rfkill/rfkill0/state
+        usleep 500000
+        echo 1 > /sys/class/rfkill/rfkill0/state
+    fi
+
+    echo "Starting Tater BLE controller"
+    start-stop-daemon -S -q -p "$PIDFILE" -m -b -x "$PATCHRAM" -- \
+        --enable_hci --no2bytes --tosleep 200000 --baudrate 115200 \
+        -patchram "$FIRMWARE" "$UART"
+}
+
+stop_bluetooth() {
+    echo "Stopping Tater BLE controller"
+    start-stop-daemon -K -q -p "$PIDFILE" 2>/dev/null || true
+    rm -f "$PIDFILE"
+    if [ -w /sys/class/rfkill/rfkill0/state ]; then
+        echo 0 > /sys/class/rfkill/rfkill0/state
+    fi
+}
+
+case "${1:-}" in
+    start)
+        start_bluetooth
+        ;;
+    stop)
+        stop_bluetooth
+        ;;
+    restart)
+        stop_bluetooth
+        sleep 1
+        start_bluetooth
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}"
+        exit 1
+        ;;
+esac

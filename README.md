@@ -27,6 +27,7 @@ ThirdReality Amlogic BSP / Buildroot
 ├── Tater Linux Voice (pinned Git commit)
 │   ├── local Hey Tater wake word and playback-reference AEC
 │   ├── outbound authenticated Tater WebSocket
+│   ├── bounded passive BLE presence observer
 │   ├── timers, live settings, and signed OTA
 │   └── localhost hardware API
 ├── ThirdReality hardware bridge
@@ -44,7 +45,7 @@ A weekly CI check reports when Tater Linux Voice `main` moves ahead.
 ## Current status
 
 The S420 is now a supported Tater-native satellite with released factory and
-OTA images. The current release is `s420-0.2.13`. The complete first-install
+OTA images. The current release is `s420-0.2.14`. The complete first-install
 path has been exercised on physical hardware: Tater can use the ThirdReality
 debug board to enter Amlogic USB-burn mode, write the verified factory image,
 boot the speaker, and verify the installed Tater runtime.
@@ -62,6 +63,8 @@ The everyday device path is also in place:
 - Tater-controlled wake model, threshold, and wake-sound settings, including
   the complete built-in sound catalog, No Sound, and cached custom WAV URLs
 - ThirdReality LEDs, Home/Tap buttons, volume controls, and microphone mute
+- passive BLE presence reports using the onboard BCM43438 radio, with scanning
+  paused during voice, streamed playback, and OTA work
 - Tater-native music, ducked voice overlays, and audio-session v3 stereo and
   synchronized multi-room playback
 - audio-scene v1 foreground/background mixing, scheduled group TTS overlays,
@@ -80,8 +83,9 @@ The new scene, scheduled-overlay, underrun-recovery, and barge-in paths are
 implemented and covered by automated tests; further physical S420 regression
 testing can refine their tuning. Tater does not claim ownership of
 the proprietary Amlogic secure-boot root, and real-world stereo calibration can
-still be refined. Bluetooth, Sendspin, Music Assistant discovery, and mDNS are
-intentionally absent from this Tater build.
+still be refined. Bluetooth pairing and profiles, Sendspin, Music Assistant
+discovery, and mDNS are intentionally absent from this Tater build. The onboard
+Bluetooth controller is used only as a passive, non-connectable BLE observer.
 
 See [the parity matrix](docs/PARITY.md) for the exact supported and deferred
 features. See [the runtime network policy](docs/NETWORK.md) for every fixed or
@@ -106,7 +110,7 @@ For a disposable development build:
 ```sh
 ./script/generate_development_ota_key.sh
 TATER_SWUPDATE_PRIVATE_KEY_FILE=.secrets/swupdate-development-private.pem \
-  ./go --docker trspk 0.2.13
+  ./go --docker trspk 0.2.14
 ```
 
 Artifacts are written to `image/` as an Amlogic USB-burn image and a signed
@@ -124,7 +128,8 @@ Join it and use the captive portal (or open `http://192.168.4.1`) to enter the
 speaker name. The setup network has no internet route and disappears after the
 speaker saves its configuration and restarts.
 
-Bluetooth, Improv, Sendspin, and mDNS are not included in the production image.
+Bluetooth provisioning and pairing, Improv, Sendspin, and mDNS are not included
+in the production image. Passive BLE presence scanning is enabled automatically.
 The local serial recovery console can still configure Tater directly:
 
 ```sh

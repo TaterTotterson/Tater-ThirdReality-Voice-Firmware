@@ -65,6 +65,14 @@ S420_AUDIO = (
     ROOT
     / "buildroot/package/thirdreality/tater-linux-satellite/files/s420_audio.py"
 )
+BLE_SCANNER = (
+    ROOT
+    / "buildroot/package/thirdreality/tater-linux-satellite/files/ble_scanner.py"
+)
+BLUETOOTH_INIT = (
+    ROOT
+    / "buildroot/package/thirdreality/tater-linux-satellite/files/S44tater-bluetooth"
+)
 S420_AUDIO_DIAGNOSTIC = (
     ROOT
     / "buildroot/package/thirdreality/tater-linux-satellite/files/tater-s420-audio-diagnostic"
@@ -97,7 +105,7 @@ NAND_OTA_FILELIST = (
 )
 SUPERVISOR = ROOT / "buildroot/package/thirdreality/tater-s420-firmware/script/S99tater-satellite"
 WIFI_INIT = ROOT / "buildroot/board/thirdreality/common/rootfs/etc/init.d/S39wifi"
-KERNEL_FRAGMENT = ROOT / "buildroot/board/thirdreality/trspk/linux-no-bluetooth.fragment"
+KERNEL_FRAGMENT = ROOT / "buildroot/board/thirdreality/trspk/linux-tater.fragment"
 KEY_HANDLER = (
     ROOT / "buildroot/board/thirdreality/trspk/rootfs/etc/adckey/adckey_function.sh"
 )
@@ -163,6 +171,8 @@ def main() -> int:
     webrtc_aec_patch = WEBRTC_AEC_PATCH.read_text(encoding="utf-8")
     tater_features = TATER_FEATURES.read_text(encoding="utf-8")
     s420_audio = S420_AUDIO.read_text(encoding="utf-8")
+    ble_scanner = BLE_SCANNER.read_text(encoding="utf-8")
+    bluetooth_init = BLUETOOTH_INIT.read_text(encoding="utf-8")
     s420_audio_diagnostic = S420_AUDIO_DIAGNOSTIC.read_text(encoding="utf-8")
     launcher = LAUNCHER.read_text(encoding="utf-8")
     hardware_bridge = HARDWARE_BRIDGE.read_text(encoding="utf-8")
@@ -208,12 +218,15 @@ def main() -> int:
         errors,
     )
     require(
-        'BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES="board/thirdreality/trspk/linux-no-bluetooth.fragment"'
+        'BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES="board/thirdreality/trspk/linux-tater.fragment"'
         in defconfig,
-        "Bluetooth-free kernel fragment is not selected",
+        "Tater kernel fragment is not selected",
         errors,
     )
-    require("# CONFIG_BT is not set" in kernel_fragment, "kernel Bluetooth stack is enabled", errors)
+    require("CONFIG_BT=y" in kernel_fragment, "kernel Bluetooth stack is disabled", errors)
+    require("CONFIG_BT_LE=y" in kernel_fragment, "kernel BLE support is disabled", errors)
+    require("CONFIG_BT_HCIUART=y" in kernel_fragment, "kernel HCI UART support is disabled", errors)
+    require("# CONFIG_BT_BREDR is not set" in kernel_fragment, "Bluetooth Classic is enabled", errors)
     require("BR2_PACKAGE_HOSTAPD=y" in defconfig, "hostapd is disabled", errors)
     require("BR2_PACKAGE_DNSMASQ_DHCP=y" in defconfig, "dnsmasq DHCP is disabled", errors)
     require("BR2_PACKAGE_PYTHON_ZEROCONF" not in package_config, "Tater selects Zeroconf", errors)
@@ -241,9 +254,10 @@ def main() -> int:
     require("avahi" not in supervisor.lower(), "supervisor still starts Avahi", errors)
     require("sendspin" not in hardware_bridge.lower(), "hardware bridge still controls Sendspin", errors)
     require("/usr/bin/dbus-send" not in blacklist, "release blacklist removes the LED bridge dependency", errors)
-    active_runtime = "\n".join((supervisor, ntp_files["boot sync"], key_handler))
-    require("S44bluetooth" not in active_runtime, "active runtime still calls Bluetooth setup", errors)
-    require("/etc/bluetooth" not in broadcom_mk, "Broadcom package still installs Bluetooth firmware", errors)
+    require("S44tater-bluetooth" in package_mk, "Tater BLE controller init is not installed", errors)
+    require("brcm_patchram_plus" in bluetooth_init, "Broadcom BLE firmware loader is missing", errors)
+    require("/dev/ttyS1" in bluetooth_init, "Broadcom BLE UART is not configured", errors)
+    require("bcm4343a1.hcd" in broadcom_mk, "Broadcom BLE firmware is not installed", errors)
     require("tater-provisioning" in package_mk, "Tater provisioning tools are not installed", errors)
     require(
         "S38tater-network-persistence" in package_mk,
@@ -315,8 +329,21 @@ def main() -> int:
         "wake_environment_profiles",
         "wake_during_playback",
         "playback_reference_aec",
+        "ble_advertisements",
     ):
         require(f'"{capability}": True' in tater_features, f"Tater feature is missing: {capability}", errors)
+    for primitive in (
+        "AF_BLUETOOTH",
+        "EVT_LE_ADVERTISING_REPORT",
+        "parse_le_advertising_reports",
+        "_DEDUPE_MAX = 48",
+        "_BATCH_MAX = 24",
+        "_SCAN_INTERVAL_UNITS = 512",
+        "_SCAN_WINDOW_UNITS = 48",
+    ):
+        require(primitive in ble_scanner, f"BLE observer primitive is missing: {primitive}", errors)
+    require("should_pause=self._ble_should_pause" in tater_features, "BLE observer is not audio-aware", errors)
+    require('self._send("ble.advertisements", payload)' in tater_features, "BLE batches are not sent to Tater", errors)
     for capability in (
         "synchronized_media_sessions",
         "stereo_channel_selection",

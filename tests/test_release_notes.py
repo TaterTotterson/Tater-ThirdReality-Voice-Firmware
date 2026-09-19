@@ -47,7 +47,7 @@ class ReleaseNotesTests(unittest.TestCase):
             notes = output.read_text(encoding="utf-8")
             self.assertIn("# Tater ThirdReality S420 Firmware 0.2.13", notes)
             self.assertIn("## What's Changed", notes)
-            self.assertIn("restored stereo-pair and synchronized group playback", notes)
+            self.assertIn("passive BLE presence reporting", notes)
             self.assertIn("signed `ota` artifact", notes)
             self.assertIn("**With Log**", notes)
             self.assertIn("| `ota` | 2.0 KB |", notes)

@@ -20,6 +20,7 @@ from typing import Any, Callable, Optional
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 from urllib.request import Request, urlopen
 
+from .ble_scanner import LinuxBleScanner
 from .peripheral_api import LVAEvent
 
 _LOGGER = logging.getLogger(__name__)
@@ -614,7 +615,14 @@ class TaterFeatureManager:
             "audio_session_version": 3 if self._sync_player_available else 1,
             "audio_scene_version": 1 if self._sync_overlay_available else 0,
             "media_sample_rate_hz": _MEDIA_SAMPLE_RATE_HZ,
+            "ble_advertisements": True,
+            "ble_advertisements_version": 1,
         }
+        self.ble_scanner = LinuxBleScanner(
+            lambda payload: self._send("ble.advertisements", payload),
+            device_id=0,
+            should_pause=self._ble_should_pause,
+        )
 
     def _send(self, message_type: str, payload: Optional[dict[str, Any]] = None) -> None:
         self.client._submit_frame(_frame(message_type, payload))  # pylint: disable=protected-access
@@ -979,6 +987,7 @@ class TaterFeatureManager:
 
     def connected(self) -> None:
         self._apply_settings(self.settings, persist=False)
+        self.ble_scanner.start()
 
     def disconnected(self) -> None:
         # Timers intentionally remain local and keep counting during a server
@@ -990,6 +999,18 @@ class TaterFeatureManager:
             self._stop_overlay(ok=False, notify=False)
         if self.media_session_id:
             self._stop_media(ok=False, notify=False)
+        self.ble_scanner.stop()
+
+    def _ble_should_pause(self) -> bool:
+        """Protect voice, streamed playback, and OTA from combo-radio contention."""
+        return bool(
+            getattr(self.satellite, "_is_streaming_audio", False)
+            or getattr(self.satellite, "_pipeline_active", False)
+            or self.media_session_id
+            or self.overlay_session is not None
+            or self.audio_scene is not None
+            or (self.ota_task is not None and not self.ota_task.done())
+        )
 
     def status(self) -> dict[str, Any]:
         self._reconcile_ringing_timers()
@@ -1013,6 +1034,7 @@ class TaterFeatureManager:
                 "verifier": self._wake_verifier_status(),
             },
             "audio_frontend": getattr(self.state, "tater_audio_frontend", {}),
+            "ble_observer": self.ble_scanner.status(),
             "data_free_bytes": disk_free,
         }
 
@@ -2663,6 +2685,7 @@ class TaterFeatureManager:
             raise
 
     async def close(self) -> None:
+        self.ble_scanner.stop()
         if self.wake_verifier_timeout_task is not None and not self.wake_verifier_timeout_task.done():
             self.wake_verifier_timeout_task.cancel()
             try:

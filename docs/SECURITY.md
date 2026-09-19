@@ -10,7 +10,9 @@ This fork does not ship the vendor image's remote administration defaults.
 - The Tater peripheral WebSocket listens only on `127.0.0.1`.
 - Satellite authentication is outbound to Tater; the paired token is stored
   mode 0600 under `/data/conf`.
-- Bluetooth and BlueZ are absent from the production image.
+- The onboard Bluetooth controller is limited to passive BLE observation.
+  Bluetooth Classic, pairing profiles, `bluetoothd`, and the BlueZ command-line
+  runtime remain absent.
 - PulseAudio RTP, RAOP, and Rygel network media modules are pruned; Tater's
   authenticated native music path remains available.
 - The open `Tater-Setup-XXXX` hotspot runs only while Wi-Fi or Tater pairing is

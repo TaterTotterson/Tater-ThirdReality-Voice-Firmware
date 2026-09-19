@@ -1,7 +1,8 @@
 # Provisioning
 
 The production image uses the same setup contract as Tater's native satellites.
-It does not include Bluetooth or Improv provisioning.
+It does not include Bluetooth pairing or Improv provisioning. The onboard
+Bluetooth controller is reserved for passive Tater presence observation.
 
 ## First boot
 

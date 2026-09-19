@@ -45,9 +45,11 @@ Build-time source and dependency downloads are not device runtime traffic.
   Wi-Fi and Tater credentials locally, then reboots into station mode.
 
 The production image does not include Sendspin, Music Assistant discovery,
-Avahi, Zeroconf/mDNS service advertising, Bluetooth, BlueZ, telnet/inetd, or
-ADB. PulseAudio's RTP, RAOP, and Rygel network modules are also pruned. Music
-and media playback use the authenticated Tater connection instead.
+Avahi, Zeroconf/mDNS service advertising, the BlueZ daemon or pairing tools,
+telnet/inetd, or ADB. A bounded raw-HCI observer passively scans BLE
+advertisements and forwards batches only through the authenticated Tater
+connection. PulseAudio's RTP, RAOP, and Rygel network modules are also pruned.
+Music and media playback use the authenticated Tater connection instead.
 
 ## Retained but inactive vendor code
 

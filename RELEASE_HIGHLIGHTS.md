@@ -1,4 +1,4 @@
-- Releases ThirdReality S420 firmware `0.2.13` with restored stereo-pair and synchronized group playback.
-- Fixes the `0.2.11` regression where both S420 members prepared and accepted a synchronized session but aborted together at the scheduled start.
-- Keeps the dedicated monotonic start timer for accurate pairing while using the proven S420 MPV resume path instead of the failing asynchronous command.
-- Reports any future scheduled-start failure through Tater device logs while preserving ordinary single-speaker playback and the existing stereo protocol.
+- Releases ThirdReality S420 firmware `0.2.14` with passive BLE presence reporting through the onboard BCM43438 radio.
+- Publishes the same bounded `ble.advertisements` v1 payload used by Tater's ESP32 satellites, allowing the existing presence API and room UI to include S420 observations without server changes.
+- Uses a lightweight raw-HCI observer instead of the BlueZ daemon and pairing stack, with fixed batch and deduplication limits to keep memory use predictable.
+- Automatically pauses BLE scanning during voice capture, streamed playback, and OTA work to protect the S420's latency and memory headroom.
