@@ -8,6 +8,8 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 RELEASE_WORKFLOW = ROOT / ".github/workflows/release-firmware.yml"
+SOURCE_UPDATE_WORKFLOW = ROOT / ".github/workflows/tater-source-parity.yml"
+SOURCE_UPDATE_SCRIPT = ROOT / "script/update_tater_linux_source.sh"
 RELEASE_HIGHLIGHTS = ROOT / "RELEASE_HIGHLIGHTS.md"
 RELEASE_NOTES_RENDERER = ROOT / "script/render_release_notes.py"
 DEFCONFIG = ROOT / "buildroot/configs/3reality_trspk_defconfig"
@@ -153,6 +155,8 @@ def require(condition: bool, message: str, errors: list[str]) -> None:
 def main() -> int:
     errors: list[str] = []
     release_workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    source_update_workflow = SOURCE_UPDATE_WORKFLOW.read_text(encoding="utf-8")
+    source_update_script = SOURCE_UPDATE_SCRIPT.read_text(encoding="utf-8")
     release_highlights = RELEASE_HIGHLIGHTS.read_text(encoding="utf-8")
     release_notes_renderer = RELEASE_NOTES_RENDERER.read_text(encoding="utf-8")
     defconfig = DEFCONFIG.read_text(encoding="utf-8")
@@ -621,6 +625,18 @@ def main() -> int:
         "script/render_release_notes.py" in release_workflow
         and '"$RELEASE_DIR/RELEASE_NOTES.md"' in release_workflow,
         "release workflow does not render structured GitHub release notes",
+        errors,
+    )
+    require(
+        "name: Tater Linux Update Check" in source_update_workflow
+        and "update_tater_linux_source.sh --report" in source_update_workflow,
+        "scheduled Tater Linux update check is not using non-failing report mode",
+        errors,
+    )
+    require(
+        "--check|--report|--update" in source_update_script
+        and "GITHUB_STEP_SUMMARY" in source_update_script,
+        "Tater Linux source updater does not preserve report and strict-check modes",
         errors,
     )
     require(

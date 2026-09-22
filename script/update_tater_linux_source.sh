@@ -7,9 +7,9 @@ REMOTE_URL="https://github.com/TaterTotterson/Tater-Linux-Satellite.git"
 MODE="${1:---check}"
 
 case "$MODE" in
-    --check|--update) ;;
+    --check|--report|--update) ;;
     *)
-        echo "Usage: $0 [--check|--update]" >&2
+        echo "Usage: $0 [--check|--report|--update]" >&2
         exit 2
         ;;
 esac
@@ -25,9 +25,30 @@ if [ "$CURRENT" = "$LATEST" ]; then
     exit 0
 fi
 
+DRIFT_MESSAGE="Tater Linux source update available: pinned=$CURRENT latest=$LATEST"
+
 if [ "$MODE" = "--check" ]; then
-    echo "Tater Linux source is behind: pinned=$CURRENT latest=$LATEST" >&2
+    echo "$DRIFT_MESSAGE" >&2
     exit 1
+fi
+
+if [ "$MODE" = "--report" ]; then
+    if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+        echo "::warning title=Tater Linux update available::$DRIFT_MESSAGE"
+    else
+        echo "$DRIFT_MESSAGE"
+    fi
+    if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+        {
+            echo "## Tater Linux update available"
+            echo
+            echo "The S420 firmware source pin remains unchanged so hardware-specific updates can be reviewed and tested before adoption."
+            echo
+            echo "- Pinned: \`$CURRENT\`"
+            echo "- Latest: \`$LATEST\`"
+        } >> "$GITHUB_STEP_SUMMARY"
+    fi
+    exit 0
 fi
 
 sed -i.bak "s/^TATER_LINUX_SATELLITE_VERSION = .*/TATER_LINUX_SATELLITE_VERSION = $LATEST/" "$PACKAGE_MK"

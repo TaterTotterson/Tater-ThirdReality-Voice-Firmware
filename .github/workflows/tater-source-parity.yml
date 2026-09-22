@@ -1,4 +1,4 @@
-name: Tater Linux Source Parity
+name: Tater Linux Update Check
 
 on:
   schedule:
@@ -10,5 +10,5 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Check pinned Tater Linux revision
-        run: ./script/update_tater_linux_source.sh --check
+      - name: Report available Tater Linux updates
+        run: ./script/update_tater_linux_source.sh --report
