@@ -8,6 +8,7 @@ tracking, pairing support, or the rest of the BlueZ userspace runtime.
 from __future__ import annotations
 
 from collections import OrderedDict
+import ctypes
 import errno
 import fcntl
 import logging
@@ -33,6 +34,10 @@ _OGF_LE_CTL = 0x08
 _OCF_LE_SET_SCAN_PARAMETERS = 0x000B
 _OCF_LE_SET_SCAN_ENABLE = 0x000C
 _HCIDEVUP = 0x400448C9
+_HCI_CHANNEL_RAW = 0
+_LIBC = ctypes.CDLL(None, use_errno=True)
+_LIBC.bind.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint]
+_LIBC.bind.restype = ctypes.c_int
 
 _SCAN_INTERVAL_UNITS = 512  # 320 ms, matching the constrained ESP32 targets.
 _SCAN_WINDOW_UNITS = 48  # 30 ms, about a 9.4% receive duty cycle.
@@ -56,6 +61,17 @@ def _opcode(ogf: int, ocf: int) -> int:
 
 def _hci_command(ogf: int, ocf: int, parameters: bytes) -> bytes:
     return struct.pack("<BHB", _HCI_COMMAND_PKT, _opcode(ogf, ocf), len(parameters)) + parameters
+
+
+def _bind_hci_socket(hci_socket: socket.socket, device_id: int) -> None:
+    """Bind a raw HCI socket even when Python lacks Bluetooth tuple support."""
+    raw_address = struct.pack("=HHH", _AF_BLUETOOTH, int(device_id), _HCI_CHANNEL_RAW)
+    address = ctypes.create_string_buffer(raw_address)
+    ctypes.set_errno(0)
+    result = _LIBC.bind(hci_socket.fileno(), address, len(raw_address))
+    if result != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, f"Could not bind raw HCI socket to hci{device_id}")
 
 
 def parse_le_advertising_reports(packet: bytes) -> list[dict[str, Any]]:
@@ -200,7 +216,9 @@ class LinuxBleScanner:
         control_socket = socket.socket(_AF_BLUETOOTH, socket.SOCK_RAW, _BTPROTO_HCI)
         try:
             try:
-                fcntl.ioctl(control_socket.fileno(), _HCIDEVUP, struct.pack("I", self.device_id))
+                # hci_sock_ioctl consumes the device id as the ioctl argument,
+                # not as a pointer to an integer.
+                fcntl.ioctl(control_socket.fileno(), _HCIDEVUP, self.device_id)
             except OSError as exc:
                 if exc.errno not in {errno.EALREADY, errno.EBUSY}:
                     raise
@@ -208,7 +226,7 @@ class LinuxBleScanner:
             control_socket.close()
 
         hci_socket = socket.socket(_AF_BLUETOOTH, socket.SOCK_RAW, _BTPROTO_HCI)
-        hci_socket.bind((self.device_id,))
+        _bind_hci_socket(hci_socket, self.device_id)
         hci_socket.settimeout(0.25)
         self._set_event_filter(hci_socket)
         try:

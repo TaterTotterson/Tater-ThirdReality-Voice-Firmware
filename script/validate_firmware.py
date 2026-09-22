@@ -340,8 +340,12 @@ def main() -> int:
         "_BATCH_MAX = 24",
         "_SCAN_INTERVAL_UNITS = 512",
         "_SCAN_WINDOW_UNITS = 48",
+        "_bind_hci_socket",
+        "fcntl.ioctl(control_socket.fileno(), _HCIDEVUP, self.device_id)",
     ):
         require(primitive in ble_scanner, f"BLE observer primitive is missing: {primitive}", errors)
+    require("--tosleep=200000" in bluetooth_init, "BLE patchram sleep syntax is invalid", errors)
+    require("--patchram" in bluetooth_init, "BLE patchram firmware syntax is invalid", errors)
     require("should_pause=self._ble_should_pause" in tater_features, "BLE observer is not audio-aware", errors)
     require('self._send("ble.advertisements", payload)' in tater_features, "BLE batches are not sent to Tater", errors)
     for capability in (

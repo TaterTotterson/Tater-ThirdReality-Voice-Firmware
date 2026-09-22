@@ -2,6 +2,7 @@ import importlib.util
 from pathlib import Path
 import struct
 import unittest
+from unittest.mock import MagicMock, call, patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -27,6 +28,40 @@ def advertising_packet(*reports: tuple[int, int, bytes, bytes, int]) -> bytes:
 
 
 class BleScannerTests(unittest.TestCase):
+    def test_opens_raw_hci_socket_with_numeric_ioctl_and_libc_bind(self) -> None:
+        scanner = ble_scanner.LinuxBleScanner(lambda _payload: None, availability_path=None)
+        control_socket = MagicMock()
+        control_socket.fileno.return_value = 10
+        observer_socket = MagicMock()
+        observer_socket.fileno.return_value = 11
+
+        with (
+            patch.object(ble_scanner.socket, "socket", side_effect=[control_socket, observer_socket]),
+            patch.object(ble_scanner.fcntl, "ioctl") as ioctl,
+            patch.object(ble_scanner, "_bind_hci_socket") as bind_hci_socket,
+        ):
+            opened = scanner._open_socket()
+
+        self.assertIs(opened, observer_socket)
+        ioctl.assert_called_once_with(10, ble_scanner._HCIDEVUP, 0)
+        bind_hci_socket.assert_called_once_with(observer_socket, 0)
+        control_socket.close.assert_called_once_with()
+        observer_socket.settimeout.assert_called_once_with(0.25)
+        self.assertEqual(
+            observer_socket.send.call_args_list,
+            [
+                call(ble_scanner._hci_command(ble_scanner._OGF_LE_CTL, ble_scanner._OCF_LE_SET_SCAN_ENABLE, b"\x00\x00")),
+                call(
+                    ble_scanner._hci_command(
+                        ble_scanner._OGF_LE_CTL,
+                        ble_scanner._OCF_LE_SET_SCAN_PARAMETERS,
+                        struct.pack("<BHHBB", 0, 512, 48, 0, 0),
+                    )
+                ),
+                call(ble_scanner._hci_command(ble_scanner._OGF_LE_CTL, ble_scanner._OCF_LE_SET_SCAN_ENABLE, b"\x01\x00")),
+            ],
+        )
+
     def test_decodes_legacy_advertising_reports(self) -> None:
         packet = advertising_packet(
             (0, 1, bytes.fromhex("665544332211"), b"\x05\x09Tater", -61),

@@ -1,4 +1,4 @@
-- Releases ThirdReality S420 firmware `0.2.14` with passive BLE presence reporting through the onboard BCM43438 radio.
-- Publishes the same bounded `ble.advertisements` v1 payload used by Tater's ESP32 satellites, allowing the existing presence API and room UI to include S420 observations without server changes.
-- Uses a lightweight raw-HCI observer instead of the BlueZ daemon and pairing stack, with fixed batch and deduplication limits to keep memory use predictable.
-- Automatically pauses BLE scanning during voice capture, streamed playback, and OTA work to protect the S420's latency and memory headroom.
+- Releases ThirdReality S420 firmware `0.2.15` with working passive BLE presence reporting on production S420 hardware.
+- Fixes Broadcom patchram command syntax so the BCM43438 controller firmware loads and `hci0` becomes available.
+- Fixes raw-HCI controller bring-up and adds a libc `sockaddr_hci` binding fallback for the S420's minimal Python build.
+- Publishes the same bounded `ble.advertisements` v1 payload used by Tater's ESP32 satellites, while retaining fixed batching, deduplication, and audio-aware scanning pauses.

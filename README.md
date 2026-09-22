@@ -45,7 +45,7 @@ A weekly CI check reports when Tater Linux Voice `main` moves ahead.
 ## Current status
 
 The S420 is now a supported Tater-native satellite with released factory and
-OTA images. The current release is `s420-0.2.14`. The complete first-install
+OTA images. The current release is `s420-0.2.15`. The complete first-install
 path has been exercised on physical hardware: Tater can use the ThirdReality
 debug board to enter Amlogic USB-burn mode, write the verified factory image,
 boot the speaker, and verify the installed Tater runtime.
@@ -110,7 +110,7 @@ For a disposable development build:
 ```sh
 ./script/generate_development_ota_key.sh
 TATER_SWUPDATE_PRIVATE_KEY_FILE=.secrets/swupdate-development-private.pem \
-  ./go --docker trspk 0.2.14
+  ./go --docker trspk 0.2.15
 ```
 
 Artifacts are written to `image/` as an Amlogic USB-burn image and a signed
