@@ -125,6 +125,7 @@ PROTOCOL_COMPAT_NO_MDNS_PATCH = (
     / "buildroot/package/thirdreality/python-tater-protocol-compat/0001-allow-import-without-zeroconf.patch"
 )
 BROADCOM_MK = ROOT / "buildroot/package/thirdreality/broadcom/broadcom.mk"
+BLUEZ_PACKAGE_MK = ROOT / "buildroot/package/thirdreality/bluez5-utils/bluez5_utils.mk"
 SENDSPIN_PACKAGE = ROOT / "buildroot/package/thirdreality/sendspin-client"
 BUSYBOX_FRAGMENT = ROOT / "buildroot/board/thirdreality/trspk/busybox-tater.fragment"
 BLACKLIST = ROOT / "buildroot/board/thirdreality/trspk/blacklist.txt"
@@ -198,6 +199,7 @@ def main() -> int:
     protocol_compat_mk = PROTOCOL_COMPAT_MK.read_text(encoding="utf-8")
     protocol_compat_no_mdns_patch = PROTOCOL_COMPAT_NO_MDNS_PATCH.read_text(encoding="utf-8")
     broadcom_mk = BROADCOM_MK.read_text(encoding="utf-8")
+    bluez_package_mk = BLUEZ_PACKAGE_MK.read_text(encoding="utf-8")
     busybox_fragment = BUSYBOX_FRAGMENT.read_text(encoding="utf-8")
     blacklist = BLACKLIST.read_text(encoding="utf-8")
     post_build = POST_BUILD.read_text(encoding="utf-8")
@@ -230,6 +232,14 @@ def main() -> int:
         "BR2_PACKAGE_BLUEZ5_UTILS_PLUGINS_NETWORK",
     ):
         require(f"{option}=y" not in defconfig, f"unneeded BlueZ option is enabled: {option}", errors)
+    bluez_tools_guard = bluez_package_mk.find("ifeq ($(BR2_PACKAGE_BLUEZ5_UTILS_TOOLS),y)")
+    bluez_tools_hook = bluez_package_mk.find("BLUEZ5_UTILS_POST_INSTALL_TARGET_HOOKS += BLUEZ5_UTILS_INSTALL_TOOLS")
+    bluez_tools_guard_end = bluez_package_mk.find("\nendif", bluez_tools_hook)
+    require(
+        0 <= bluez_tools_guard < bluez_tools_hook < bluez_tools_guard_end,
+        "vendor btgatt-server installation is not guarded by the BlueZ tools option",
+        errors,
+    )
     require(
         'BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES="board/thirdreality/trspk/linux-tater.fragment"'
         in defconfig,

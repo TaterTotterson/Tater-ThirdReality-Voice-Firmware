@@ -1,4 +1,5 @@
-- Releases ThirdReality S420 firmware `0.2.17`.
+- Releases ThirdReality S420 firmware `0.2.18`.
 - Adds one-shot BLE enrollment through BlueZ so the S420 can securely pair a nearby phone or watch and report its identity resolving key to Tater.
 - Limits pairing to an explicit, short-lived enrollment window, removes the temporary bond after key capture, and resumes passive BLE presence reporting.
 - Advertises BLE enrollment support through the native satellite protocol while keeping identity keys out of logs.
+- Corrects the vendor BlueZ packaging hook so disabled legacy tools are not installed or started alongside Tater's enrollment service.
