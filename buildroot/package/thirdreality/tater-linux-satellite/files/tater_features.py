@@ -2302,6 +2302,15 @@ class TaterFeatureManager:
         self.overlay_session = session
         session.task = asyncio.create_task(self._run_overlay(session))
 
+    def _set_reply_light(self, active: bool) -> None:
+        payload: dict[str, Any] = {"state": active}
+        if active:
+            payload["effect"] = "speaking"
+        self.satellite._emit(  # pylint: disable=protected-access
+            LVAEvent.LIGHT_COMMAND,
+            payload,
+        )
+
     async def _run_overlay(self, session: _OverlaySession) -> None:
         loop = asyncio.get_running_loop()
         playback_finished: asyncio.Future[None] = loop.create_future()
@@ -2318,6 +2327,7 @@ class TaterFeatureManager:
             if not self._sync_overlay_available:
                 await self._ramp_music_duck(session.duck_target, session.attack_ms)
                 self.state.tts_player.play(session.url, done_callback=finished, stop_first=True)
+                self._set_reply_light(True)
                 session.started = True
                 actual_start_us = time.monotonic_ns() // 1000
                 self._send(
@@ -2358,6 +2368,7 @@ class TaterFeatureManager:
                 if self.overlay_session is not session:
                     return
                 self.state.tts_player.resume()
+                self._set_reply_light(True)
                 actual_resume_us = time.monotonic_ns() // 1000
                 actual_audible_us = actual_resume_us + latency_us
                 session.started = True
@@ -2390,6 +2401,7 @@ class TaterFeatureManager:
                 self.state.tts_player.reset_synchronized()
             session.finished = True
             self.overlay_session = None
+            self._set_reply_light(False)
             self._send(
                 "audio.overlay.finished",
                 {
@@ -2420,6 +2432,7 @@ class TaterFeatureManager:
     def _finish_overlay_failure(self, session: _OverlaySession) -> None:
         session.finished = True
         self.overlay_session = None
+        self._set_reply_light(False)
         self._set_music_duck(1.0)
         try:
             self.state.tts_player.stop()
@@ -2439,6 +2452,7 @@ class TaterFeatureManager:
         self._overlay_generation += 1
         self.overlay_session = None
         session.finished = True
+        self._set_reply_light(False)
         try:
             current = asyncio.current_task()
         except RuntimeError:
@@ -2528,6 +2542,7 @@ class TaterFeatureManager:
                 self.state.music_player.resume()
                 await self._ramp_music_duck(scene.duck_target, scene.attack_ms)
             self.state.tts_player.resume()
+            self._set_reply_light(True)
             scene.started = True
             watched_players = [("audio-scene speech", self.state.tts_player)]
             if scene.background_url and scene.background_loop:
@@ -2551,6 +2566,7 @@ class TaterFeatureManager:
             self._set_music_duck(1.0)
             scene.finished = True
             self.audio_scene = None
+            self._set_reply_light(False)
             self._send("audio.scene.finished", {"scene_id": scene.scene_id, "ok": True})
         except asyncio.CancelledError:
             raise
@@ -2577,6 +2593,7 @@ class TaterFeatureManager:
         self._scene_generation += 1
         self.audio_scene = None
         scene.finished = True
+        self._set_reply_light(False)
         try:
             current = asyncio.current_task()
         except RuntimeError:

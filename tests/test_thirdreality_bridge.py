@@ -106,6 +106,24 @@ class BridgeHelpersTest(unittest.TestCase):
         self.assertEqual(settings["led_listening_animation"], "heartbeat")
         self.assertEqual(settings["led_thinking_animation"], "breathe")
         self.assertEqual(settings["led_tool_call_animation"], "solid")
+        self.assertEqual(settings["led_replying_animation"], "audio_glow")
+
+    def test_audio_glow_reads_fresh_speaker_level_and_rejects_stale_data(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            level_path = Path(temp_dir) / "speaker-level.bin"
+            level_path.write_bytes(bridge_module.PLAYBACK_LEVEL_RECORD.pack(0.18, 10.0))
+            self.assertAlmostEqual(
+                bridge_module.read_playback_level(level_path, now=10.1),
+                0.18,
+                places=5,
+            )
+            self.assertEqual(bridge_module.read_playback_level(level_path, now=11.0), 0.0)
+
+    def test_audio_glow_brightens_the_whole_status_light_with_audio(self) -> None:
+        quiet_envelope, quiet = bridge_module.audio_glow_step(0.0, 0.0)
+        loud_envelope, loud = bridge_module.audio_glow_step(0.22, quiet_envelope)
+        self.assertGreater(loud_envelope, quiet_envelope)
+        self.assertGreater(loud, quiet * 20)
 
     def test_animation_only_drives_the_visible_s420_status_light(self) -> None:
         content = bridge_module.animation_text("pulse", "#ff5a1f", 80)
@@ -208,6 +226,16 @@ class BridgeButtonTest(unittest.IsolatedAsyncioTestCase):
             self.bridge.current_led_animation,
             ("tater-tool-call.animation", False),
         )
+
+    async def test_reply_audio_glow_starts_live_renderer(self) -> None:
+        self.bridge.last_led_settings = dict(bridge_module.TATER_LED_DEFAULTS)
+        with mock.patch.object(self.bridge, "_audio_glow_loop", new=mock.AsyncMock()), mock.patch.object(
+            bridge_module, "show_animation"
+        ) as show:
+            await self.bridge.handle_event(json.dumps({"event": "tts_speaking"}))
+            await self.bridge._stop_audio_glow()
+
+        show.assert_called_once_with("none.animation", True)
 
 
 if __name__ == "__main__":

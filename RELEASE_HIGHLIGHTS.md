@@ -1,4 +1,5 @@
-- Releases ThirdReality S420 firmware `0.2.15` with working passive BLE presence reporting on production S420 hardware.
-- Fixes Broadcom patchram command syntax so the BCM43438 controller firmware loads and `hci0` becomes available.
-- Fixes raw-HCI controller bring-up and adds a libc `sockaddr_hci` binding fallback for the S420's minimal Python build.
-- Publishes the same bounded `ble.advertisements` v1 payload used by Tater's ESP32 satellites, while retaining fixed batching, deduplication, and audio-aware scanning pauses.
+- Releases ThirdReality S420 firmware `0.2.16`.
+- Adds the `Audio Glow` reply animation, driven by the S420 codec's real stereo speaker-loopback level rather than a synthetic effect.
+- Smoothly varies the top RGB status light with spoken replies while preserving the configured color, brightness, and existing users' animation choices.
+- Extends reply lighting to synchronized TTS overlays and audio scenes, including stereo-pair playback.
+- Retains the production-tested passive BLE presence reporting introduced in the previous release.

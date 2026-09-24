@@ -1,6 +1,7 @@
 import importlib.util
 import io
 from pathlib import Path
+import tempfile
 import unittest
 from unittest import mock
 
@@ -69,11 +70,19 @@ class S420AudioTests(unittest.TestCase):
             dtype="<i2",
         )
         process = _Process(frames.tobytes())
-        with mock.patch.object(s420_audio.subprocess, "Popen", return_value=process):
-            with s420_audio.S420FourChannelRecorder("hw:0,4") as recorder:
-                primary = recorder.record(2)
-                reference = np.frombuffer(recorder.reference_audio, dtype="<i2")
-                status = recorder.status()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            level_path = Path(temp_dir) / "speaker-level.bin"
+            with mock.patch.object(s420_audio.subprocess, "Popen", return_value=process):
+                with s420_audio.S420FourChannelRecorder(
+                    "hw:0,4",
+                    playback_level_path=level_path,
+                ) as recorder:
+                    primary = recorder.record(2)
+                    reference = np.frombuffer(recorder.reference_audio, dtype="<i2")
+                    published_level, published_at = s420_audio.PLAYBACK_LEVEL_RECORD.unpack(
+                        level_path.read_bytes()
+                    )
+                    status = recorder.status()
 
         np.testing.assert_allclose(
             primary.reshape(-1),
@@ -83,6 +92,8 @@ class S420AudioTests(unittest.TestCase):
         self.assertEqual(status["capture_backend"], "alsa_4ch")
         self.assertEqual(status["channels"]["mic1"]["peak"], 2000)
         self.assertEqual(status["channels"]["ref_left"]["peak"], 3000)
+        self.assertAlmostEqual(published_level, (5_000_000**0.5) / 32768.0, places=5)
+        self.assertGreater(published_at, 0.0)
 
     def test_direct_capture_failure_falls_back_to_existing_mono_input(self) -> None:
         with mock.patch.object(

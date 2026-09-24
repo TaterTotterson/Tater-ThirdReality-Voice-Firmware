@@ -10,7 +10,11 @@ from __future__ import annotations
 
 import logging
 import math
+import os
+from pathlib import Path
+import struct
 import subprocess
+import time
 from typing import Any, Optional
 
 import numpy as np
@@ -19,6 +23,8 @@ _LOGGER = logging.getLogger(__name__)
 _CHANNEL_NAMES = ("mic0", "mic1", "ref_left", "ref_right")
 _SAMPLE_WIDTH_BYTES = 2
 _HARDWARE_CHANNELS = 4
+PLAYBACK_LEVEL_PATH = Path("/run/tater-s420-playback-level.bin")
+PLAYBACK_LEVEL_RECORD = struct.Struct("<fd")
 
 
 class S420FourChannelMicrophone:
@@ -50,11 +56,13 @@ class S420FourChannelRecorder:
         samplerate: int = 16000,
         blocksize: int = 1024,
         fallback_microphone: Any = None,
+        playback_level_path: Path = PLAYBACK_LEVEL_PATH,
     ) -> None:
         self.device = str(device or "hw:0,4")
         self.samplerate = int(samplerate)
         self.blocksize = int(blocksize)
         self.fallback_microphone = fallback_microphone
+        self.playback_level_path = Path(playback_level_path)
         self.reference_audio: Optional[bytes] = None
         self.backend = "starting"
         self.fallback_reason = ""
@@ -64,6 +72,7 @@ class S420FourChannelRecorder:
         self._level_squares = np.zeros(_HARDWARE_CHANNELS, dtype=np.float64)
         self._level_peaks = np.zeros(_HARDWARE_CHANNELS, dtype=np.int32)
         self._level_samples = 0
+        self._playback_level_fd: Optional[int] = None
 
     def __enter__(self):
         try:
@@ -104,6 +113,16 @@ class S420FourChannelRecorder:
             raise RuntimeError("arecord did not provide an audio stream")
         self.backend = "alsa_4ch"
         self.fallback_reason = ""
+        try:
+            self.playback_level_path.parent.mkdir(parents=True, exist_ok=True)
+            self._playback_level_fd = os.open(
+                self.playback_level_path,
+                os.O_WRONLY | os.O_CREAT | getattr(os, "O_CLOEXEC", 0),
+                0o644,
+            )
+        except OSError:
+            self._playback_level_fd = None
+            _LOGGER.warning("Unable to publish the S420 speaker level", exc_info=True)
         _LOGGER.info("Using S420 synchronized four-channel capture from %s", self.device)
 
     def _activate_fallback(self, reason: str) -> None:
@@ -157,9 +176,25 @@ class S420FourChannelRecorder:
             samples[:, 2].astype(np.int32) + samples[:, 3].astype(np.int32)
         ) // 2
         self.reference_audio = np.clip(reference, -32768, 32767).astype("<i2").tobytes()
+        # Measure both speaker channels independently so anti-phase stereo
+        # material cannot cancel the LED envelope the way a mono downmix can.
+        self._publish_playback_level(measured[:, 2:4])
 
         primary = samples[:, 0].astype(np.float32) / 32768.0
         return primary.reshape(-1, 1)
+
+    def _publish_playback_level(self, reference: np.ndarray) -> None:
+        descriptor = self._playback_level_fd
+        if descriptor is None:
+            return
+        measured = reference.astype(np.float64)
+        rms = math.sqrt(float(np.mean(measured * measured))) / 32768.0 if measured.size else 0.0
+        record = PLAYBACK_LEVEL_RECORD.pack(max(0.0, min(1.0, rms)), time.monotonic())
+        try:
+            os.pwrite(descriptor, record, 0)
+            os.ftruncate(descriptor, len(record))
+        except OSError:
+            _LOGGER.debug("Unable to publish S420 speaker level", exc_info=True)
 
     def record(self, frame_count: int) -> np.ndarray:
         frame_count = int(frame_count)
@@ -200,6 +235,15 @@ class S420FourChannelRecorder:
         }
 
     def _close_direct(self) -> None:
+        descriptor = self._playback_level_fd
+        self._playback_level_fd = None
+        if descriptor is not None:
+            try:
+                os.pwrite(descriptor, PLAYBACK_LEVEL_RECORD.pack(0.0, time.monotonic()), 0)
+                os.ftruncate(descriptor, PLAYBACK_LEVEL_RECORD.size)
+            except OSError:
+                pass
+            os.close(descriptor)
         process = self._process
         self._process = None
         if process is None:

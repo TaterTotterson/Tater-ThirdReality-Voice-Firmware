@@ -913,10 +913,18 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0)
         self.assertEqual(self.client.state.music_player.duck_factor, 0.25)
         self.assertTrue(self._messages("audio.overlay.started"))
+        self.assertIn(
+            (_Event.LIGHT_COMMAND, {"state": True, "effect": "speaking"}),
+            self.client.satellite.events,
+        )
         self.client.state.tts_player.done_callback()
         await asyncio.sleep(0.01)
         self.assertIsNone(self.client.state.music_player.duck_factor)
         self.assertTrue(self._messages("audio.overlay.finished"))
+        self.assertIn(
+            (_Event.LIGHT_COMMAND, {"state": False}),
+            self.client.satellite.events,
+        )
 
     async def test_synchronized_overlay_honors_audible_deadline(self) -> None:
         start_at_us = (tater_features.time.monotonic_ns() // 1000) + 180_000
@@ -976,11 +984,19 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.client.state.music_player.duck_factor, 0.35)
         self.assertGreaterEqual(self.client.state.music_player.resume_count, 1)
         self.assertGreaterEqual(self.client.state.tts_player.resume_count, 1)
+        self.assertIn(
+            (_Event.LIGHT_COMMAND, {"state": True, "effect": "speaking"}),
+            self.client.satellite.events,
+        )
         self.client.state.tts_player.done_callback()
         await asyncio.sleep(0.01)
         finished = self._messages("audio.scene.finished")[-1]["payload"]
         self.assertEqual(finished, {"scene_id": "weather-scene", "ok": True})
         self.assertIsNone(self.client.state.music_player.duck_factor)
+        self.assertIn(
+            (_Event.LIGHT_COMMAND, {"state": False}),
+            self.client.satellite.events,
+        )
 
     async def test_media_underrun_rejoins_shared_timeline(self) -> None:
         self.manager.handle_message(

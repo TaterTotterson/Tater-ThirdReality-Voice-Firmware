@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import fcntl
 import json
 import logging
@@ -29,6 +30,13 @@ MIC_MUTE_GPIO = Path("/sys/class/gpio/gpio438/value")
 INPUT_DEVICE = Path("/dev/input/event0")
 ANIMATION_DIR = Path("/usr/share/thirdreality/animation")
 TATER_ANIMATION_DIR = Path("/data/tater/led-animations")
+PLAYBACK_LEVEL_PATH = Path("/run/tater-s420-playback-level.bin")
+PLAYBACK_LEVEL_RECORD = struct.Struct("<fd")
+STATUS_LIGHT_PATHS = (
+    Path("/sys/class/leds/RGB_R/brightness"),
+    Path("/sys/class/leds/RGB_G/brightness"),
+    Path("/sys/class/leds/RGB_B/brightness"),
+)
 
 EV_KEY = 1
 KEY_HOME = 102
@@ -54,9 +62,9 @@ TATER_LED_DEFAULTS: dict[str, Any] = {
     "led_listening_animation": "pulse",
     "led_thinking_animation": "breathe",
     "led_tool_call_animation": "heartbeat",
-    "led_replying_animation": "pulse",
+    "led_replying_animation": "audio_glow",
 }
-TATER_LED_STYLES = {"pulse", "breathe", "heartbeat", "solid"}
+TATER_LED_STYLES = {"audio_glow", "pulse", "breathe", "heartbeat", "solid"}
 PIPELINE_ACTIVE_EVENTS = {
     "wake_word_detected",
     "listening",
@@ -177,7 +185,9 @@ def read_led_settings(path: Path = LIVE_SETTINGS) -> dict[str, Any]:
         "led_replying_animation",
     ):
         style = str(value.get(key) or "").strip().lower()
-        if style in TATER_LED_STYLES:
+        if style in TATER_LED_STYLES and (
+            style != "audio_glow" or key == "led_replying_animation"
+        ):
             settings[key] = style
     return settings
 
@@ -188,9 +198,55 @@ def _scaled_color(color: str, brightness: int, intensity: float) -> str:
     return "".join(f"{int(round(channel * factor)):02x}" for channel in channels)
 
 
+def read_playback_level(
+    path: Path = PLAYBACK_LEVEL_PATH,
+    *,
+    now: Optional[float] = None,
+    stale_seconds: float = 0.35,
+) -> float:
+    """Read the current speaker RMS published by synchronized ALSA capture."""
+    try:
+        payload = path.read_bytes()
+        if len(payload) != PLAYBACK_LEVEL_RECORD.size:
+            return 0.0
+        level, updated_at = PLAYBACK_LEVEL_RECORD.unpack(payload)
+    except (FileNotFoundError, OSError, struct.error):
+        return 0.0
+    current = time.monotonic() if now is None else now
+    if updated_at <= 0.0 or current - updated_at > stale_seconds:
+        return 0.0
+    return max(0.0, min(1.0, float(level)))
+
+
+def audio_glow_step(level: float, envelope: float) -> tuple[float, float]:
+    """Advance the shared fast-attack, syllable-rate release response curve."""
+    target = max(0.0, min(1.0, float(level) / 0.22)) ** 0.70
+    alpha = 0.60 if target > envelope else 0.30
+    envelope += (target - envelope) * alpha
+    perceptual = 0.06 + (0.94 * envelope)
+    return envelope, max(0.008, perceptual**2.20)
+
+
+def write_status_light(
+    color: str,
+    brightness: int,
+    intensity: float,
+    paths: tuple[Path, Path, Path] = STATUS_LIGHT_PATHS,
+) -> None:
+    """Write one audio-reactive RGB frame to the S420's visible status LED."""
+    rgb = _scaled_color(color, brightness, intensity)
+    try:
+        for path, offset in zip(paths, (0, 2, 4)):
+            path.write_text(str(int(rgb[offset : offset + 2], 16)), encoding="utf-8")
+    except OSError:
+        _LOGGER.debug("Unable to update S420 Audio Glow frame", exc_info=True)
+
+
 def animation_text(style: str, color: str, brightness: int) -> str:
     """Create an S420 animation using only its visible center status light."""
     patterns: dict[str, list[tuple[int, float]]] = {
+        # The bridge replaces this low fallback frame with live speaker RMS.
+        "audio_glow": [(250, 0.08)],
         "pulse": [(55, value) for value in (0.12, 0.28, 0.52, 0.78, 1.0, 0.78, 0.52, 0.28)],
         "breathe": [(95, value) for value in (0.10, 0.20, 0.36, 0.58, 0.80, 1.0, 0.80, 0.58, 0.36, 0.20)],
         "heartbeat": [(70, value) for value in (0.08, 1.0, 0.15, 0.08, 0.68, 0.12, 0.08, 0.08)],
@@ -305,6 +361,46 @@ class ThirdRealityBridge:
         self.last_led_settings: Optional[dict[str, Any]] = None
         self.current_led_event = "idle"
         self.current_led_animation: Optional[tuple[str, bool]] = EVENT_ANIMATIONS["idle"]
+        self.audio_glow_task: Optional[asyncio.Task[None]] = None
+
+    def _reply_uses_audio_glow(self, animation: tuple[str, bool]) -> bool:
+        settings = self.last_led_settings or TATER_LED_DEFAULTS
+        return (
+            animation[0] == "tater-replying.animation"
+            and settings.get("led_replying_animation") == "audio_glow"
+        )
+
+    async def _audio_glow_loop(self) -> None:
+        envelope = 0.0
+        while True:
+            level = await asyncio.to_thread(read_playback_level)
+            envelope, intensity = audio_glow_step(level, envelope)
+            settings = self.last_led_settings or TATER_LED_DEFAULTS
+            await asyncio.to_thread(
+                write_status_light,
+                str(settings["led_color"]),
+                int(settings["led_brightness"]),
+                intensity,
+            )
+            await asyncio.sleep(0.04)
+
+    async def _stop_audio_glow(self) -> None:
+        task = self.audio_glow_task
+        self.audio_glow_task = None
+        if task is None:
+            return
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    async def _show_led_animation(self, animation: tuple[str, bool]) -> None:
+        if self._reply_uses_audio_glow(animation):
+            if self.audio_glow_task is None or self.audio_glow_task.done():
+                await asyncio.to_thread(show_animation, "none.animation", True)
+                self.audio_glow_task = asyncio.create_task(self._audio_glow_loop())
+            return
+        await self._stop_audio_glow()
+        await asyncio.to_thread(show_animation, animation[0], animation[1])
 
     async def send_command(self, command: str, data: Optional[dict[str, Any]] = None) -> None:
         websocket = self.websocket
@@ -330,7 +426,7 @@ class ThirdRealityBridge:
             {
                 "name": "Tater S420 Status Light",
                 "object_id": "tater_s420_status_light",
-                "effects": ["Tater Pulse", "Tater Breathe", "Tater Heartbeat", "Steady Tater Glow"],
+                "effects": ["Audio Glow", "Tater Pulse", "Tater Breathe", "Tater Heartbeat", "Steady Tater Glow"],
                 "supports_rgb": True,
                 "supports_brightness": True,
             },
@@ -380,7 +476,7 @@ class ThirdRealityBridge:
         animation = event_animation(event, payload)
         if animation is not None:
             self.current_led_animation = animation
-            await asyncio.to_thread(show_animation, animation[0], animation[1])
+            await self._show_led_animation(animation)
 
     async def hardware_sync_loop(self) -> None:
         while True:
@@ -397,7 +493,7 @@ class ThirdRealityBridge:
                 await asyncio.to_thread(write_tater_animations, led_settings)
                 animation = self.current_led_animation or event_animation(self.current_led_event)
                 if animation is not None:
-                    await asyncio.to_thread(show_animation, animation[0], animation[1])
+                    await self._show_led_animation(animation)
             await asyncio.sleep(0.25)
 
     async def dispatch_button(self, clicks: int, long_press: bool = False) -> None:
@@ -491,6 +587,7 @@ class ThirdRealityBridge:
             finally:
                 self.websocket = None
                 self.pipeline_active = False
+                await self._stop_audio_glow()
                 await asyncio.to_thread(show_animation, "error.animation", True)
             await asyncio.sleep(2)
 
