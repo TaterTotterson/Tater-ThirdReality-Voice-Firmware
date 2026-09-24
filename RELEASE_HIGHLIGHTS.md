@@ -1,5 +1,4 @@
-- Releases ThirdReality S420 firmware `0.2.16`.
-- Adds the `Audio Glow` reply animation, driven by the S420 codec's real stereo speaker-loopback level rather than a synthetic effect.
-- Smoothly varies the top RGB status light with spoken replies while preserving the configured color, brightness, and existing users' animation choices.
-- Extends reply lighting to synchronized TTS overlays and audio scenes, including stereo-pair playback.
-- Retains the production-tested passive BLE presence reporting introduced in the previous release.
+- Releases ThirdReality S420 firmware `0.2.17`.
+- Adds one-shot BLE enrollment through BlueZ so the S420 can securely pair a nearby phone or watch and report its identity resolving key to Tater.
+- Limits pairing to an explicit, short-lived enrollment window, removes the temporary bond after key capture, and resumes passive BLE presence reporting.
+- Advertises BLE enrollment support through the native satellite protocol while keeping identity keys out of logs.

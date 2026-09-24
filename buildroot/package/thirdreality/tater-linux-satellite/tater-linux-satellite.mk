@@ -60,6 +60,8 @@ define TATER_LINUX_SATELLITE_INSTALL_RESOURCES
 		$(TATER_LINUX_SATELLITE_PYTHON_SITE)/linux_voice_assistant/s420_audio.py
 	$(INSTALL) -D -m 0644 $(TATER_LINUX_SATELLITE_PKGDIR)/files/ble_scanner.py \
 		$(TATER_LINUX_SATELLITE_PYTHON_SITE)/linux_voice_assistant/ble_scanner.py
+	$(INSTALL) -D -m 0644 $(TATER_LINUX_SATELLITE_PKGDIR)/files/ble_enrollment.py \
+		$(TATER_LINUX_SATELLITE_PYTHON_SITE)/linux_voice_assistant/ble_enrollment.py
 	printf '%s\n' 'tater-thirdreality-$(TATER_LINUX_SATELLITE_VERSION)' > \
 		$(TATER_LINUX_SATELLITE_PYTHON_SITE)/version.txt
 	$(INSTALL) -D -m 0755 $(TATER_LINUX_SATELLITE_PKGDIR)/files/tater-satellite-launcher \
@@ -78,6 +80,9 @@ define TATER_LINUX_SATELLITE_INSTALL_RESOURCES
 		$(TARGET_DIR)/etc/init.d/S38tater-network-persistence
 	$(INSTALL) -D -m 0755 $(TATER_LINUX_SATELLITE_PKGDIR)/files/S44tater-bluetooth \
 		$(TARGET_DIR)/etc/init.d/S44tater-bluetooth
+	# The raw observer owns hci0 normally; enrollment starts bluetoothd only for
+	# its explicit one-shot window.
+	rm -f $(TARGET_DIR)/etc/init.d/S40bluetooth
 	$(INSTALL) -D -m 0600 $(TATER_LINUX_SATELLITE_PKGDIR)/files/tater.json \
 		$(TARGET_DIR)/usr/share/tater/defaults/tater.json
 endef
