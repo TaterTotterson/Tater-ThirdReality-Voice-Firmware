@@ -12,6 +12,7 @@ from __future__ import annotations
 import configparser
 import logging
 from pathlib import Path
+import queue
 import re
 import shutil
 import subprocess
@@ -25,6 +26,13 @@ _IRK_RE = re.compile(r"^[0-9a-fA-F]{32}$")
 _ID_RE = re.compile(r"^[0-9a-fA-F-]{8,64}$")
 _SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9 ._-]+")
 _BLUEZ_STORE = Path("/var/lib/bluetooth")
+_BLUEZ_FAILURE_MARKERS = (
+    "Failed to ",
+    "No default controller",
+    "not available",
+    "not found",
+    "Unable to find",
+)
 
 
 def read_identity_key(path: str | Path) -> str:
@@ -143,25 +151,99 @@ class LinuxBleEnrollment:
         return "", ""
 
     @staticmethod
-    def _write_command(process: subprocess.Popen[str], command: str, delay: float = 0.12) -> None:
+    def _write_command(process: subprocess.Popen[str], command: str, delay: float = 0.08) -> None:
         if process.stdin is None:
             raise RuntimeError("bluetoothctl input is unavailable")
         process.stdin.write(command + "\n")
         process.stdin.flush()
         time.sleep(delay)
 
+    @staticmethod
+    def _bluetoothctl_command(path: str) -> list[str]:
+        # bluetoothctl otherwise auto-registers its default DisplayYesNo agent.
+        # A later `agent NoInputNoOutput` command cannot replace that agent.
+        return [path, "--agent", "NoInputNoOutput"]
+
+    @staticmethod
+    def _capture_output(
+        process: subprocess.Popen[str],
+        output: queue.Queue[str],
+    ) -> None:
+        if process.stdout is None:
+            return
+        for line in process.stdout:
+            output.put(line.strip())
+
+    @staticmethod
+    def _wait_for_output(
+        process: subprocess.Popen[str],
+        output: queue.Queue[str],
+        expected: str,
+        operation: str,
+        timeout: float = 5.0,
+    ) -> None:
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError(f"BlueZ timed out while trying to {operation}.")
+            try:
+                line = output.get(timeout=min(remaining, 0.25))
+            except queue.Empty:
+                if process.poll() is not None:
+                    raise RuntimeError(f"bluetoothctl exited while trying to {operation}.")
+                continue
+            if any(marker in line for marker in _BLUEZ_FAILURE_MARKERS):
+                detail = line[-120:] if line else "unknown BlueZ error"
+                raise RuntimeError(f"BlueZ could not {operation}: {detail}")
+            if expected in line:
+                return
+
+    def _command_and_wait(
+        self,
+        process: subprocess.Popen[str],
+        output: queue.Queue[str],
+        command: str,
+        expected: str,
+        operation: str,
+    ) -> None:
+        self._write_command(process, command, delay=0.0)
+        self._wait_for_output(process, output, expected, operation)
+
     def _configure_controller(
         self,
         process: subprocess.Popen[str],
+        output: queue.Queue[str],
         display_name: str,
         timeout_s: int,
     ) -> None:
-        commands = (
-            "power on",
-            "pairable on",
-            "discoverable on",
-            "agent NoInputNoOutput",
-            "default-agent",
+        self._wait_for_output(
+            process,
+            output,
+            "Agent registered",
+            "register the no-input/no-output pairing agent",
+        )
+        setup_commands = (
+            ("default-agent", "Default agent request successful", "select the pairing agent"),
+            ("power on", "Changing power on succeeded", "power on the controller"),
+            (
+                f'system-alias "{display_name}"',
+                f"Changing {display_name} succeeded",
+                "set the enrollment name",
+            ),
+            ("pairable on", "Changing pairable on succeeded", "enable pairing"),
+            (
+                "discoverable off",
+                "Changing discoverable off succeeded",
+                "disable classic discovery",
+            ),
+        )
+        for command, expected, operation in setup_commands:
+            if self._cancel.is_set():
+                return
+            self._command_and_wait(process, output, command, expected, operation)
+
+        gatt_commands = (
             "menu gatt",
             "register-service 180d",
             "yes",
@@ -170,23 +252,43 @@ class LinuxBleEnrollment:
             "register-characteristic 2a37 notify",
             "00 48",
             "register-application",
+        )
+        for command in gatt_commands:
+            if self._cancel.is_set():
+                return
+            self._write_command(process, command)
+        self._wait_for_output(
+            process,
+            output,
+            "Application registered",
+            "register the enrollment GATT service",
+        )
+
+        advertise_commands = (
             "back",
             "menu advertise",
             "uuids 180d",
-            f"name {display_name}",
+            f'name "{display_name}"',
             "discoverable on",
             f"timeout {timeout_s}",
             "back",
             "advertise on",
         )
-        for command in commands:
+        for command in advertise_commands:
             if self._cancel.is_set():
                 return
             self._write_command(process, command)
+        self._wait_for_output(
+            process,
+            output,
+            "Advertising object registered",
+            "start the enrollment advertisement",
+        )
 
     def _run(self, enrollment_id: str, display_name: str, timeout_s: int) -> None:
         bluetoothd: Optional[subprocess.Popen[bytes]] = None
         bluetoothctl: Optional[subprocess.Popen[str]] = None
+        bluetoothctl_output: queue.Queue[str] = queue.Queue()
         peer_address = ""
         completed = False
         self._emit(
@@ -210,15 +312,26 @@ class LinuxBleEnrollment:
             )
             time.sleep(0.6)
             bluetoothctl = subprocess.Popen(  # noqa: S603 - fixed root-owned binary
-                [ctl_path],
+                self._bluetoothctl_command(ctl_path),
                 stdin=subprocess.PIPE,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
                 text=True,
                 bufsize=1,
             )
+            threading.Thread(
+                target=self._capture_output,
+                args=(bluetoothctl, bluetoothctl_output),
+                name="tater-bluetoothctl-output",
+                daemon=True,
+            ).start()
             started_at = time.time()
-            self._configure_controller(bluetoothctl, display_name, timeout_s)
+            self._configure_controller(
+                bluetoothctl,
+                bluetoothctl_output,
+                display_name,
+                timeout_s,
+            )
             if self._cancel.is_set():
                 self._set_status(enrollment_id, "cancelled")
                 return

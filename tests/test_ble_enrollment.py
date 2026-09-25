@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import queue
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -42,9 +43,29 @@ class BleEnrollmentTests(unittest.TestCase):
     def test_controller_script_answers_bluez_gatt_prompts(self) -> None:
         enrollment = ble_enrollment.LinuxBleEnrollment(lambda *_: None, object())
         commands = []
-        with patch.object(enrollment, "_write_command", side_effect=lambda _process, command: commands.append(command)):
-            enrollment._configure_controller(object(), "Tater Enroll 1234", 90)
+        with (
+            patch.object(
+                enrollment,
+                "_write_command",
+                side_effect=lambda _process, command, **_kwargs: commands.append(command),
+            ),
+            patch.object(enrollment, "_wait_for_output"),
+        ):
+            enrollment._configure_controller(
+                object(),
+                queue.Queue(),
+                "Tater Enroll 1234",
+                90,
+            )
 
+        self.assertEqual(
+            ["/usr/bin/bluetoothctl", "--agent", "NoInputNoOutput"],
+            enrollment._bluetoothctl_command("/usr/bin/bluetoothctl"),
+        )
+        self.assertIn('system-alias "Tater Enroll 1234"', commands)
+        self.assertIn('name "Tater Enroll 1234"', commands)
+        self.assertIn("discoverable off", commands)
+        self.assertNotIn("agent NoInputNoOutput", commands)
         service_index = commands.index("register-service 180d")
         self.assertEqual("yes", commands[service_index + 1])
         location_index = commands.index("register-characteristic 2a38 read")
@@ -52,6 +73,21 @@ class BleEnrollmentTests(unittest.TestCase):
         measurement_index = commands.index("register-characteristic 2a37 notify")
         self.assertEqual("00 48", commands[measurement_index + 1])
         self.assertEqual("register-application", commands[measurement_index + 2])
+
+    def test_bluez_setup_errors_are_not_reported_as_advertising(self) -> None:
+        enrollment = ble_enrollment.LinuxBleEnrollment(lambda *_: None, object())
+        output = queue.Queue()
+        output.put("Failed to register advertisement: org.bluez.Error.Failed")
+        process = Mock()
+        process.poll.return_value = None
+
+        with self.assertRaisesRegex(RuntimeError, "register the advertisement"):
+            enrollment._wait_for_output(
+                process,
+                output,
+                "Advertising object registered",
+                "register the advertisement",
+            )
 
 
 if __name__ == "__main__":
