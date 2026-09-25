@@ -20,7 +20,6 @@ from typing import Any, Callable, Optional
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 from urllib.request import Request, urlopen
 
-from .ble_enrollment import LinuxBleEnrollment
 from .ble_scanner import LinuxBleScanner
 from .peripheral_api import LVAEvent
 
@@ -618,15 +617,12 @@ class TaterFeatureManager:
             "media_sample_rate_hz": _MEDIA_SAMPLE_RATE_HZ,
             "ble_advertisements": True,
             "ble_advertisements_version": 1,
-            "ble_enrollment": True,
-            "ble_enrollment_version": 1,
         }
         self.ble_scanner = LinuxBleScanner(
             lambda payload: self._send("ble.advertisements", payload),
             device_id=0,
             should_pause=self._ble_should_pause,
         )
-        self.ble_enrollment = LinuxBleEnrollment(self._send, self.ble_scanner)
 
     def _send(self, message_type: str, payload: Optional[dict[str, Any]] = None) -> None:
         self.client._submit_frame(_frame(message_type, payload))  # pylint: disable=protected-access
@@ -1003,7 +999,6 @@ class TaterFeatureManager:
             self._stop_overlay(ok=False, notify=False)
         if self.media_session_id:
             self._stop_media(ok=False, notify=False)
-        self.ble_enrollment.stop()
         self.ble_scanner.stop()
 
     def _ble_should_pause(self) -> bool:
@@ -1040,7 +1035,6 @@ class TaterFeatureManager:
             },
             "audio_frontend": getattr(self.state, "tater_audio_frontend", {}),
             "ble_observer": self.ble_scanner.status(),
-            "ble_enrollment": self.ble_enrollment.status(),
             "data_free_bytes": disk_free,
         }
 
@@ -1069,22 +1063,6 @@ class TaterFeatureManager:
                 available=_truthy(payload.get("available")),
                 reason=str(payload.get("reason") or "")[:120],
             )
-            return True
-        if message_type == "ble.enrollment.start":
-            try:
-                self.ble_enrollment.start(payload)
-            except (RuntimeError, ValueError) as exc:
-                self._send(
-                    "ble.enrollment.result",
-                    {
-                        "enrollment_id": str(payload.get("enrollment_id") or ""),
-                        "ok": False,
-                        "error": str(exc),
-                    },
-                )
-            return True
-        if message_type == "ble.enrollment.cancel":
-            self.ble_enrollment.cancel(str(payload.get("enrollment_id") or ""))
             return True
         if message_type in {"timer.start", "timer.arm"}:
             self._start_timer(payload, message_id, replace=message_type == "timer.arm")

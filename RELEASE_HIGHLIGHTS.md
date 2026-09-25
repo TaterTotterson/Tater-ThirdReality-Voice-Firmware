@@ -1,5 +1,4 @@
-- Releases ThirdReality S420 firmware `0.2.19`.
-- Starts BlueZ enrollment with a no-input/no-output agent so phone and watch pairing does not fall back to numeric confirmation.
-- Publishes the requested `Tater Enroll` name through the BLE advertisement while keeping the classic `BlueZ 5.66` identity hidden.
-- Confirms GATT and advertising registration before reporting readiness, and forwards setup failures to Tater immediately.
-- Restores passive BLE presence reporting after enrollment completes, fails, times out, or is cancelled.
+- Releases ThirdReality S420 firmware `0.2.20` as a forward-installable stability rollback.
+- Restores the production-tested firmware behavior from `0.2.16`.
+- Removes the experimental BLE device-enrollment path added after `0.2.16`.
+- Retains passive BLE presence reporting and the `Audio Glow` reply animation.

@@ -279,8 +279,6 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.manager.capabilities["wake_environment_profiles"])
         self.assertTrue(self.manager.capabilities["wake_during_playback"])
         self.assertTrue(self.manager.capabilities["playback_reference_aec"])
-        self.assertTrue(self.manager.capabilities["ble_enrollment"])
-        self.assertEqual(self.manager.capabilities["ble_enrollment_version"], 1)
         self.assertEqual(self.manager.capabilities["media_output_latency_frames"], 6144)
         self.assertEqual(self.manager.capabilities["audio_session_version"], 3)
         self.assertEqual(self.manager.capabilities["audio_scene_version"], 1)

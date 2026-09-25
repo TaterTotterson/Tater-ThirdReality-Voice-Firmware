@@ -212,7 +212,6 @@ Device=bcm
 DeviceID=bluetooth:02d0:4356
 endif
 
-ifeq ($(BR2_PACKAGE_BLUEZ5_UTILS_TOOLS),y)
 define BLUEZ5_UTILS_INSTALL_TOOLS
 	$(INSTALL) -D -m 0755 $(@D)/tools/btgatt-server $(TARGET_DIR)/usr/bin
 	$(INSTALL) -D -m 0755 $(TOPDIR)/package/thirdreality/bluez5-utils/bluez_tool.sh $(TARGET_DIR)/etc/init.d/S44bluetooth
@@ -220,7 +219,6 @@ endef
 
 BLUEZ5_UTILS_POST_INSTALL_TARGET_HOOKS += BLUEZ5_UTILS_INSTALL_TOOLS
 BLUEZ5_UTILS_CONF_OPTS += --enable-deprecated
-endif
 
 define BLUEZ5_UTILS_INSTALL_INIT_SYSTEMD
 	mkdir -p $(TARGET_DIR)/etc/systemd/system/bluetooth.target.wants

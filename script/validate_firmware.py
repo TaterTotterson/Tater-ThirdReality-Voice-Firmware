@@ -71,10 +71,6 @@ BLE_SCANNER = (
     ROOT
     / "buildroot/package/thirdreality/tater-linux-satellite/files/ble_scanner.py"
 )
-BLE_ENROLLMENT = (
-    ROOT
-    / "buildroot/package/thirdreality/tater-linux-satellite/files/ble_enrollment.py"
-)
 BLUETOOTH_INIT = (
     ROOT
     / "buildroot/package/thirdreality/tater-linux-satellite/files/S44tater-bluetooth"
@@ -125,7 +121,6 @@ PROTOCOL_COMPAT_NO_MDNS_PATCH = (
     / "buildroot/package/thirdreality/python-tater-protocol-compat/0001-allow-import-without-zeroconf.patch"
 )
 BROADCOM_MK = ROOT / "buildroot/package/thirdreality/broadcom/broadcom.mk"
-BLUEZ_PACKAGE_MK = ROOT / "buildroot/package/thirdreality/bluez5-utils/bluez5_utils.mk"
 SENDSPIN_PACKAGE = ROOT / "buildroot/package/thirdreality/sendspin-client"
 BUSYBOX_FRAGMENT = ROOT / "buildroot/board/thirdreality/trspk/busybox-tater.fragment"
 BLACKLIST = ROOT / "buildroot/board/thirdreality/trspk/blacklist.txt"
@@ -181,7 +176,6 @@ def main() -> int:
     tater_features = TATER_FEATURES.read_text(encoding="utf-8")
     s420_audio = S420_AUDIO.read_text(encoding="utf-8")
     ble_scanner = BLE_SCANNER.read_text(encoding="utf-8")
-    ble_enrollment = BLE_ENROLLMENT.read_text(encoding="utf-8")
     bluetooth_init = BLUETOOTH_INIT.read_text(encoding="utf-8")
     s420_audio_diagnostic = S420_AUDIO_DIAGNOSTIC.read_text(encoding="utf-8")
     launcher = LAUNCHER.read_text(encoding="utf-8")
@@ -199,7 +193,6 @@ def main() -> int:
     protocol_compat_mk = PROTOCOL_COMPAT_MK.read_text(encoding="utf-8")
     protocol_compat_no_mdns_patch = PROTOCOL_COMPAT_NO_MDNS_PATCH.read_text(encoding="utf-8")
     broadcom_mk = BROADCOM_MK.read_text(encoding="utf-8")
-    bluez_package_mk = BLUEZ_PACKAGE_MK.read_text(encoding="utf-8")
     busybox_fragment = BUSYBOX_FRAGMENT.read_text(encoding="utf-8")
     blacklist = BLACKLIST.read_text(encoding="utf-8")
     post_build = POST_BUILD.read_text(encoding="utf-8")
@@ -222,22 +215,10 @@ def main() -> int:
     require("BR2_PACKAGE_SENDSPIN_CLIENT=y" not in defconfig, "Sendspin is enabled", errors)
     require("BR2_PACKAGE_AVAHI=y" not in defconfig, "Avahi is enabled", errors)
     require("BR2_PACKAGE_AVAHI_DAEMON=y" not in defconfig, "Avahi daemon is enabled", errors)
-    require("BR2_PACKAGE_BLUEZ5_UTILS=y" in defconfig, "BlueZ enrollment support is disabled", errors)
-    require("BR2_PACKAGE_BLUEZ5_UTILS_CLIENT=y" in defconfig, "bluetoothctl is disabled", errors)
-    for option in (
-        "BR2_PACKAGE_BLUEZ5_UTILS_OBEX",
-        "BR2_PACKAGE_BLUEZ5_UTILS_MONITOR",
-        "BR2_PACKAGE_BLUEZ5_UTILS_TOOLS",
-        "BR2_PACKAGE_BLUEZ5_UTILS_DEPRECATED",
-        "BR2_PACKAGE_BLUEZ5_UTILS_PLUGINS_NETWORK",
-    ):
-        require(f"{option}=y" not in defconfig, f"unneeded BlueZ option is enabled: {option}", errors)
-    bluez_tools_guard = bluez_package_mk.find("ifeq ($(BR2_PACKAGE_BLUEZ5_UTILS_TOOLS),y)")
-    bluez_tools_hook = bluez_package_mk.find("BLUEZ5_UTILS_POST_INSTALL_TARGET_HOOKS += BLUEZ5_UTILS_INSTALL_TOOLS")
-    bluez_tools_guard_end = bluez_package_mk.find("\nendif", bluez_tools_hook)
+    require("BR2_PACKAGE_BLUEZ5_UTILS=y" not in defconfig, "BlueZ is enabled", errors)
     require(
-        0 <= bluez_tools_guard < bluez_tools_hook < bluez_tools_guard_end,
-        "vendor btgatt-server installation is not guarded by the BlueZ tools option",
+        "# BR2_PACKAGE_BLUEZ5_UTILS is not set" in defconfig,
+        "BlueZ is not explicitly disabled against the vendor default",
         errors,
     )
     require(
@@ -278,8 +259,6 @@ def main() -> int:
     require("sendspin" not in hardware_bridge.lower(), "hardware bridge still controls Sendspin", errors)
     require("/usr/bin/dbus-send" not in blacklist, "release blacklist removes the LED bridge dependency", errors)
     require("S44tater-bluetooth" in package_mk, "Tater BLE controller init is not installed", errors)
-    require("ble_enrollment.py" in package_mk, "BLE enrollment helper is not installed", errors)
-    require("S40bluetooth" in package_mk, "automatic bluetoothd startup is not removed", errors)
     require("brcm_patchram_plus" in bluetooth_init, "Broadcom BLE firmware loader is missing", errors)
     require("/dev/ttyS1" in bluetooth_init, "Broadcom BLE UART is not configured", errors)
     require("bcm4343a1.hcd" in broadcom_mk, "Broadcom BLE firmware is not installed", errors)
@@ -369,14 +348,6 @@ def main() -> int:
         "fcntl.ioctl(control_socket.fileno(), _HCIDEVUP, self.device_id)",
     ):
         require(primitive in ble_scanner, f"BLE observer primitive is missing: {primitive}", errors)
-    for primitive in (
-        "IdentityResolvingKey",
-        "bluetoothctl",
-        "self.observer.stop()",
-        "self.observer.start()",
-        'f"remove {peer_address}"',
-    ):
-        require(primitive in ble_enrollment, f"BLE enrollment primitive is missing: {primitive}", errors)
     require("--tosleep=200000" in bluetooth_init, "BLE patchram sleep syntax is invalid", errors)
     require("--patchram" in bluetooth_init, "BLE patchram firmware syntax is invalid", errors)
     require("should_pause=self._ble_should_pause" in tater_features, "BLE observer is not audio-aware", errors)
