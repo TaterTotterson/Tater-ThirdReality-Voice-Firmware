@@ -38,18 +38,25 @@ Build-time source and dependency downloads are not device runtime traffic.
   Firmware downloads are accepted by SWUpdate only when their signature matches
   the Tater public key embedded at build time.
 - The Tater peripheral WebSocket is loopback-only at `127.0.0.1:6055`.
+- Sendspin advertises the player over local mDNS and listens on TCP port `8928`.
+  Its identity and pairing keys are stored under `/data/conf/sendspin`. The
+  firmware permits explicit unpaired local sessions for Tater compatibility;
+  paired controllers can use the protocol's encrypted pairing path. Sendspin
+  media arrives as the controller's synchronized stream rather than through a
+  fixed public service.
 - When unconfigured, Wi-Fi provisioning uses an open local
   `Tater-Setup-XXXX` AP on `192.168.4.1`. DHCP leases are limited to
   `192.168.4.20` through `192.168.4.100`, wildcard DNS resolves to the captive
   portal, and the setup subnet has no upstream internet route. The portal saves
   Wi-Fi and Tater credentials locally, then reboots into station mode.
 
-The production image does not include Sendspin, Music Assistant discovery,
-Avahi, Zeroconf/mDNS service advertising, the BlueZ daemon or pairing tools,
-telnet/inetd, or ADB. A bounded raw-HCI observer passively scans BLE
+The production image includes the official Sendspin player and Avahi mDNS
+advertising, but it does not include the BlueZ daemon's persistent pairing
+profile, telnet/inetd, or ADB. A bounded raw-HCI observer passively scans BLE
 advertisements and forwards batches only through the authenticated Tater
 connection. PulseAudio's RTP, RAOP, and Rygel network modules are also pruned.
-Music and media playback use the authenticated Tater connection instead.
+Music and grouped media playback use Sendspin; native voice, TTS, announcements,
+and signed OTA remain under the authenticated Tater connection.
 
 ## Retained but inactive vendor code
 

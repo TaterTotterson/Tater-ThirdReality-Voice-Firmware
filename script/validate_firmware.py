@@ -122,6 +122,9 @@ PROTOCOL_COMPAT_NO_MDNS_PATCH = (
 )
 BROADCOM_MK = ROOT / "buildroot/package/thirdreality/broadcom/broadcom.mk"
 SENDSPIN_PACKAGE = ROOT / "buildroot/package/thirdreality/sendspin-client"
+SENDSPIN_MK = SENDSPIN_PACKAGE / "sendspin-client.mk"
+SENDSPIN_WRAPPER = SENDSPIN_PACKAGE / "files/tater-sendspin"
+SENDSPIN_ROUTING_PATCH = SENDSPIN_PACKAGE / "0001-add-tater-output-channel-routing.patch"
 BUSYBOX_FRAGMENT = ROOT / "buildroot/board/thirdreality/trspk/busybox-tater.fragment"
 BLACKLIST = ROOT / "buildroot/board/thirdreality/trspk/blacklist.txt"
 POST_BUILD = ROOT / "buildroot/board/thirdreality/trspk/post_build.sh"
@@ -193,6 +196,9 @@ def main() -> int:
     protocol_compat_mk = PROTOCOL_COMPAT_MK.read_text(encoding="utf-8")
     protocol_compat_no_mdns_patch = PROTOCOL_COMPAT_NO_MDNS_PATCH.read_text(encoding="utf-8")
     broadcom_mk = BROADCOM_MK.read_text(encoding="utf-8")
+    sendspin_mk = SENDSPIN_MK.read_text(encoding="utf-8")
+    sendspin_wrapper = SENDSPIN_WRAPPER.read_text(encoding="utf-8")
+    sendspin_routing_patch = SENDSPIN_ROUTING_PATCH.read_text(encoding="utf-8")
     busybox_fragment = BUSYBOX_FRAGMENT.read_text(encoding="utf-8")
     blacklist = BLACKLIST.read_text(encoding="utf-8")
     post_build = POST_BUILD.read_text(encoding="utf-8")
@@ -212,9 +218,7 @@ def main() -> int:
     require("BR2_PACKAGE_TATER_LINUX_SATELLITE=y" in defconfig, "Tater package is disabled", errors)
     require("BR2_PACKAGE_TATER_S420_FIRMWARE=y" in defconfig, "Tater S420 integration is disabled", errors)
     require("BR2_PACKAGE_TR_PROJ_HA_SPEAKER" not in defconfig, "legacy HA project package is selected", errors)
-    require("BR2_PACKAGE_SENDSPIN_CLIENT=y" not in defconfig, "Sendspin is enabled", errors)
-    require("BR2_PACKAGE_AVAHI=y" not in defconfig, "Avahi is enabled", errors)
-    require("BR2_PACKAGE_AVAHI_DAEMON=y" not in defconfig, "Avahi daemon is enabled", errors)
+    require("BR2_PACKAGE_SENDSPIN_CLIENT=y" in defconfig, "Sendspin is disabled", errors)
     require("BR2_PACKAGE_BLUEZ5_UTILS=y" not in defconfig, "BlueZ is enabled", errors)
     require(
         "# BR2_PACKAGE_BLUEZ5_UTILS is not set" in defconfig,
@@ -249,13 +253,25 @@ def main() -> int:
         "protocol compatibility schema still exports its removed network client",
         errors,
     )
-    require(
-        not SENDSPIN_PACKAGE.exists() or not any(SENDSPIN_PACKAGE.iterdir()),
-        "Sendspin package remains in the source tree",
-        errors,
-    )
-    require("sendspin" not in supervisor.lower(), "supervisor still manages Sendspin", errors)
-    require("avahi" not in supervisor.lower(), "supervisor still starts Avahi", errors)
+    require("github,Sendspin,sendspin-cpp-cli" in sendspin_mk, "official Sendspin CLI is not pinned", errors)
+    require("github,Sendspin,sendspin-cpp" in sendspin_mk, "official Sendspin library is not pinned", errors)
+    require("SENDSPIN_CLIENT_NOISE_C_VERSION" in sendspin_mk, "Sendspin Noise dependency is not pinned", errors)
+    require("SENDSPIN_CLI_WITH_PULSE=ON" in sendspin_mk, "Sendspin PulseAudio output is disabled", errors)
+    require("BUILD_SHARED_LIBS=OFF" in sendspin_mk, "Sendspin bundled libraries are not static", errors)
+    require("SENDSPIN_CLI_WITH_MDNS=ON" in sendspin_mk, "Sendspin mDNS discovery is disabled", errors)
+    for primitive in (
+        "--allow-unpaired",
+        "--port 8928",
+        "--output pulse",
+        "--mdns-name",
+        "TATER_SENDSPIN_OUTPUT_CHANNEL",
+    ):
+        require(primitive in sendspin_wrapper, f"Sendspin runtime option is missing: {primitive}", errors)
+    require("--no-config" not in sendspin_wrapper, "Sendspin uses an unsupported --no-config flag", errors)
+    require("return {{48000}, {16}, {2}};" in sendspin_routing_patch, "Sendspin format is not bounded for S420 audio", errors)
+    for primitive in ("OutputChannel::Left", "OutputChannel::Right", "OutputChannel::Mono"):
+        require(primitive in sendspin_routing_patch, f"Sendspin output route is missing: {primitive}", errors)
+    require("start_sendspin" in supervisor, "supervisor does not manage Sendspin", errors)
     require("sendspin" not in hardware_bridge.lower(), "hardware bridge still controls Sendspin", errors)
     require("/usr/bin/dbus-send" not in blacklist, "release blacklist removes the LED bridge dependency", errors)
     require("S44tater-bluetooth" in package_mk, "Tater BLE controller init is not installed", errors)
@@ -323,7 +339,6 @@ def main() -> int:
         "timers",
         "ota",
         "setup_mode",
-        "persistent_media_sessions",
         "tts_overlays",
         "barge_in",
         "wake_sounds",
@@ -333,6 +348,8 @@ def main() -> int:
         "wake_environment_profiles",
         "wake_during_playback",
         "playback_reference_aec",
+        "sendspin_player",
+        "sendspin_output_channel_selection",
         "ble_advertisements",
     ):
         require(f'"{capability}": True' in tater_features, f"Tater feature is missing: {capability}", errors)
@@ -352,29 +369,15 @@ def main() -> int:
     require("--patchram" in bluetooth_init, "BLE patchram firmware syntax is invalid", errors)
     require("should_pause=self._ble_should_pause" in tater_features, "BLE observer is not audio-aware", errors)
     require('self._send("ble.advertisements", payload)' in tater_features, "BLE batches are not sent to Tater", errors)
-    for capability in (
-        "synchronized_media_sessions",
-        "stereo_channel_selection",
-        "media_playhead_telemetry",
-        "media_drift_correction",
-        "media_rate_slew",
-        "media_render_clock",
-        "media_startup_realign",
-    ):
-        require(
-            f'"{capability}": self._sync_player_available' in tater_features,
-            f"synchronized media capability is not guarded by the mpv runtime: {capability}",
-            errors,
-        )
     require(
-        '"audio_session_version": 3 if self._sync_player_available else 1' in tater_features,
-        "Tater audio-session v3 is not advertised with the synchronized player",
+        '"sendspin_version": 1' in tater_features
+        and '"sendspin_output_channel_modes": ["stereo", "left", "right", "mono"]' in tater_features,
+        "Sendspin v1 capabilities are incomplete",
         errors,
     )
     for capability in (
         "audio_scenes",
         "looping_background_audio",
-        "synchronized_tts_overlays",
     ):
         require(
             f'"{capability}": self._sync_overlay_available' in tater_features,
@@ -382,19 +385,8 @@ def main() -> int:
             errors,
         )
     require(
-        '"media_underrun_recovery": self._sync_player_available' in tater_features,
-        "media underrun recovery is not guarded by synchronized mpv",
-        errors,
-    )
-    require(
         '"audio_scene_version": 1 if self._sync_overlay_available else 0' in tater_features,
         "Tater audio-scene v1 is not advertised with both synchronized players",
-        errors,
-    )
-    require(
-        '"media_output_latency_frames"' in tater_features
-        and "_MEDIA_DEFAULT_OUTPUT_LATENCY_FRAMES" in tater_features,
-        "S420 synchronized playback does not advertise its output render lead",
         errors,
     )
     for primitive in (
@@ -547,9 +539,6 @@ def main() -> int:
     for primitive in (
         "_run_audio_scene",
         "_run_overlay",
-        "_recover_media_timeline",
-        "rejoin_count",
-        "rejoin_frames",
     ):
         require(
             primitive in tater_features,

@@ -17,7 +17,7 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional
-from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
+from urllib.parse import urljoin, urlparse
 from urllib.request import Request, urlopen
 
 from .ble_scanner import LinuxBleScanner
@@ -60,23 +60,22 @@ _WAKE_VERIFIER_MODES = {"off", "observe", "enforce"}
 _WAKE_SENSITIVITIES = {"low", "normal", "high", "very_high"}
 _WAKE_ENVIRONMENTS = {"far_field", "balanced", "strict", "tv_nearby"}
 _MEDIA_SAMPLE_RATE_HZ = 48000
-_MEDIA_PREPARE_TIMEOUT_SECONDS = 60.0
-_MEDIA_PREPARE_MIN_BUFFER_SECONDS = 0.20
-_MEDIA_PREPARE_STABLE_SAMPLES = 2
-_MEDIA_COMMIT_TIMEOUT_SECONDS = 30.0
-_MEDIA_PLAYHEAD_INTERVAL_SECONDS = 1.0
 _MEDIA_DEFAULT_OUTPUT_LATENCY_FRAMES = 6144
-_MEDIA_MAX_OUTPUT_LATENCY_FRAMES = 24000
-_MEDIA_LATENCY_EMA_ALPHA = 0.25
-_MEDIA_LATENCY_LEARN_SAMPLES = 3
-_MEDIA_RECOVERY_THRESHOLD_FRAMES = 2400
-_MEDIA_RECOVERY_SEEK_TIMEOUT_SECONDS = 1.5
-_MEDIA_RECOVERY_FADE_SECONDS = 0.12
 _AUDIO_PREPARE_TIMEOUT_SECONDS = 10.0
 _AUDIO_RAMP_STEP_SECONDS = 0.02
 _PLAYBACK_WATCHDOG_INTERVAL_SECONDS = 0.5
 _PLAYBACK_STALL_TIMEOUT_SECONDS = 5.0
-_MEDIA_CHANNELS = {"stereo", "left", "right", "mono"}
+_SENDSPIN_CHANNELS = {"stereo", "left", "right", "mono"}
+_SENDSPIN_PLAYING_MARKER = Path("/tmp/tater-sendspin-playing")
+_RETIRED_MEDIA_MESSAGES = {
+    "audio.clock.sync",
+    "media.session.start",
+    "media.session.prepare",
+    "media.session.commit",
+    "media.session.volume",
+    "media.session.adjust",
+    "media.session.stop",
+}
 _LED_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
 _LED_ANIMATIONS = {"pulse", "breathe", "heartbeat", "solid"}
 _LED_SETTING_KEYS = (
@@ -101,14 +100,6 @@ def _integer(value: Any, default: int = 0, *, minimum: int = 0, maximum: int = 2
     except (TypeError, ValueError):
         result = default
     return max(minimum, min(maximum, result))
-
-
-def _signed_integer(value: Any, default: int = 0, *, limit: int = 2**31 - 1) -> int:
-    try:
-        result = int(round(float(value)))
-    except (TypeError, ValueError):
-        result = default
-    return max(-abs(limit), min(abs(limit), result))
 
 
 def _normalize_wake_sensitivity(value: Any) -> str:
@@ -417,42 +408,6 @@ class _Timer:
 
 
 @dataclass
-class _MediaSession:
-    session_id: str
-    group_id: str
-    reply_to: str
-    channel: str
-    start_position_ms: int
-    prepare_requested: bool
-    source_url: str = ""
-    loop: bool = False
-    prepared: bool = False
-    committed: bool = False
-    started: bool = False
-    scheduled_start_us: int = 0
-    audible_start_us: int = 0
-    actual_start_us: int = 0
-    output_latency_frames: int = _MEDIA_DEFAULT_OUTPUT_LATENCY_FRAMES
-    latency_learning_samples: int = 0
-    timeline_base_frames: int = 0
-    correction_frames_since_report: int = 0
-    underrun_events: int = 0
-    rejoin_count: int = 0
-    rejoin_frames: int = 0
-    recovering: bool = False
-    was_rebuffering: bool = False
-    rebuffer_started_at: float = 0.0
-    last_rendered_frames: int = -1
-    last_render_progress_at: float = 0.0
-    prepare_task: Optional[asyncio.Task[None]] = None
-    commit_timeout_task: Optional[asyncio.Task[None]] = None
-    start_timer: Optional[threading.Timer] = None
-    playhead_task: Optional[asyncio.Task[None]] = None
-    adjust_task: Optional[asyncio.Task[None]] = None
-    recovery_task: Optional[asyncio.Task[None]] = None
-
-
-@dataclass
 class _OverlaySession:
     overlay_id: str
     url: str
@@ -499,10 +454,6 @@ class TaterFeatureManager:
         self.satellite = client.satellite
         self.state = client.state
         self.timers: dict[str, _Timer] = {}
-        self.media_session_id = ""
-        self.media_group_id = ""
-        self.media_started_at = 0.0
-        self.media_session: Optional[_MediaSession] = None
         self.overlay_session: Optional[_OverlaySession] = None
         self.audio_scene: Optional[_AudioScene] = None
         self._overlay_generation = 0
@@ -590,31 +541,17 @@ class TaterFeatureManager:
             "setup_mode": True,
             "timers": True,
             "ota": True,
-            "persistent_media_sessions": True,
-            "media_session_volume": True,
             "audio_ducking": True,
             "tts_overlays": True,
             "audio_scenes": self._sync_overlay_available,
             "looping_background_audio": self._sync_overlay_available,
             "barge_in": True,
-            "synchronized_media_sessions": self._sync_player_available,
-            "stereo_channel_selection": self._sync_player_available,
-            "media_playhead_telemetry": self._sync_player_available,
-            "media_drift_correction": self._sync_player_available,
-            "media_rate_slew": self._sync_player_available,
-            "media_startup_realign": self._sync_player_available,
-            "media_render_clock": self._sync_player_available,
-            "media_output_latency_frames": (
-                _MEDIA_DEFAULT_OUTPUT_LATENCY_FRAMES if self._sync_player_available else 0
-            ),
-            "media_underrun_recovery": self._sync_player_available,
-            "media_stall_recovery": self._sync_player_available,
-            "media_session_start_position": self._sync_player_available,
-            "synchronized_tts_overlays": self._sync_overlay_available,
             "audio_stall_recovery": self._sync_overlay_available,
-            "audio_session_version": 3 if self._sync_player_available else 1,
             "audio_scene_version": 1 if self._sync_overlay_available else 0,
-            "media_sample_rate_hz": _MEDIA_SAMPLE_RATE_HZ,
+            "sendspin_player": True,
+            "sendspin_version": 1,
+            "sendspin_output_channel_selection": True,
+            "sendspin_output_channel_modes": ["stereo", "left", "right", "mono"],
             "ble_advertisements": True,
             "ble_advertisements_version": 1,
         }
@@ -961,13 +898,6 @@ class TaterFeatureManager:
             self._set_music_duck(start + ((target - start) * index / steps))
             await asyncio.sleep(step_delay)
 
-    @staticmethod
-    def _url_with_start(url: str, position_seconds: float) -> str:
-        parsed = urlparse(url)
-        query = dict(parse_qsl(parsed.query, keep_blank_values=True))
-        query["start"] = f"{max(0.0, position_seconds):.3f}"
-        return urlunparse(parsed._replace(query=urlencode(query)))
-
     def _load_settings(self) -> dict[str, Any]:
         try:
             value = json.loads(_SETTINGS_PATH.read_text(encoding="utf-8"))
@@ -985,20 +915,32 @@ class TaterFeatureManager:
         except OSError:
             _LOGGER.exception("Unable to persist Tater live settings")
 
+    @staticmethod
+    def _restart_sendspin() -> None:
+        """Restart the player after a persisted channel-routing change."""
+        try:
+            subprocess.Popen(  # pylint: disable=consider-using-with
+                ["/etc/init.d/S99tater-satellite", "sendspin", "restart"],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except OSError:
+            _LOGGER.exception("Unable to restart the Sendspin player")
+
     def connected(self) -> None:
         self._apply_settings(self.settings, persist=False)
         self.ble_scanner.start()
 
     def disconnected(self) -> None:
-        # Timers intentionally remain local and keep counting during a server
-        # reconnect. Media is stopped because its remote session is gone.
+        # Timers and Sendspin playback are independent of the Tater control
+        # connection, so both intentionally survive a server reconnect.
         self._fail_open_pending_wake_verification("disconnect_fail_open")
         if self.audio_scene is not None:
             self._stop_audio_scene(ok=False, notify=False)
         if self.overlay_session is not None:
             self._stop_overlay(ok=False, notify=False)
-        if self.media_session_id:
-            self._stop_media(ok=False, notify=False)
         self.ble_scanner.stop()
 
     def _ble_should_pause(self) -> bool:
@@ -1006,7 +948,7 @@ class TaterFeatureManager:
         return bool(
             getattr(self.satellite, "_is_streaming_audio", False)
             or getattr(self.satellite, "_pipeline_active", False)
-            or self.media_session_id
+            or _SENDSPIN_PLAYING_MARKER.exists()
             or self.overlay_session is not None
             or self.audio_scene is not None
             or (self.ota_task is not None and not self.ota_task.done())
@@ -1023,7 +965,12 @@ class TaterFeatureManager:
         return {
             "timer_count": len(self.timers),
             "timer_ringing": any(timer.ringing for timer in self.timers.values()),
-            "media_session_id": self.media_session_id,
+            "sendspin": {
+                "playing": _SENDSPIN_PLAYING_MARKER.exists(),
+                "output_channel_mode": str(
+                    self.settings.get("output_channel_mode") or "stereo"
+                ),
+            },
             "ota_active": self.ota_task is not None and not self.ota_task.done(),
             "wake_model_downloading": self.wake_model_downloading,
             "wake_sound_downloading": self.wake_sound_downloading,
@@ -1043,6 +990,9 @@ class TaterFeatureManager:
         message_id = str(body.get("id") or "").strip()
         raw_payload = body.get("payload")
         payload = raw_payload if isinstance(raw_payload, dict) else {}
+
+        if message_type in _RETIRED_MEDIA_MESSAGES:
+            return True
 
         if message_type == "voice.event":
             event_name = str(payload.get("event") or "").strip().upper()
@@ -1082,37 +1032,6 @@ class TaterFeatureManager:
             return True
         if message_type == "settings":
             self._apply_settings(payload, persist=True)
-            return True
-        if message_type == "audio.clock.sync":
-            receive_us = time.monotonic_ns() // 1000
-            self._send(
-                "audio.clock.sync.result",
-                {
-                    "reply_to": message_id,
-                    "ok": True,
-                    "server_send_us": _integer(payload.get("server_send_us"), maximum=2**63 - 1),
-                    "satellite_receive_us": receive_us,
-                    "satellite_send_us": time.monotonic_ns() // 1000,
-                },
-            )
-            return True
-        if message_type == "media.session.start":
-            self._start_media(payload, message_id)
-            return True
-        if message_type == "media.session.prepare":
-            self._prepare_media(payload, message_id)
-            return True
-        if message_type == "media.session.commit":
-            self._commit_media(payload, message_id)
-            return True
-        if message_type == "media.session.volume":
-            self._set_media_volume(payload, message_id)
-            return True
-        if message_type == "media.session.adjust":
-            self._adjust_media(payload, message_id)
-            return True
-        if message_type == "media.session.stop":
-            self._stop_media(ok=True)
             return True
         if message_type == "audio.overlay.start":
             self._start_overlay(payload)
@@ -1251,6 +1170,9 @@ class TaterFeatureManager:
 
     def _apply_settings(self, payload: dict[str, Any], *, persist: bool) -> None:
         applied: dict[str, Any] = {}
+        previous_output_channel = str(
+            self.settings.get("output_channel_mode") or "stereo"
+        )
         if "volume_percent" in payload:
             volume = _integer(payload.get("volume_percent"), 80, maximum=100)
             self.state.music_player.set_volume(volume)
@@ -1342,6 +1264,12 @@ class TaterFeatureManager:
             level = getattr(logging, level_name, logging.INFO)
             logging.getLogger().setLevel(level)
             applied["logging_level"] = level_name.lower()
+        if "output_channel_mode" in payload:
+            output_channel = str(
+                payload.get("output_channel_mode") or "stereo"
+            ).strip().lower()
+            if output_channel in _SENDSPIN_CHANNELS:
+                applied["output_channel_mode"] = output_channel
         if "led_brightness" in payload:
             applied["led_brightness"] = _integer(payload.get("led_brightness"), 80, maximum=100)
         if "led_color" in payload:
@@ -1368,6 +1296,11 @@ class TaterFeatureManager:
             )
             if persist:
                 self._save_settings()
+                if (
+                    "output_channel_mode" in applied
+                    and str(applied["output_channel_mode"]) != previous_output_channel
+                ):
+                    self._restart_sendspin()
         policy_keys = {"wake_threshold", "wake_sensitivity", "wake_environment"}
         if policy_keys.intersection(applied) or not persist:
             self._apply_wake_policy(
@@ -1566,714 +1499,6 @@ class TaterFeatureManager:
             if generation == self.wake_model_generation:
                 self.wake_model_downloading = False
 
-    def _start_media(self, payload: dict[str, Any], reply_to: str) -> None:
-        self._queue_media(payload, reply_to, prepare=False)
-
-    def _prepare_media(self, payload: dict[str, Any], reply_to: str) -> None:
-        self._queue_media(payload, reply_to, prepare=True)
-
-    def _queue_media(self, payload: dict[str, Any], reply_to: str, *, prepare: bool) -> None:
-        media = payload.get("media") if isinstance(payload.get("media"), dict) else payload
-        url = str(media.get("url") or "").strip()
-        result_type = "media.session.prepare.result" if prepare else "media.session.start.result"
-        if not url:
-            self._send(result_type, {"reply_to": reply_to, "ok": False, "error": "media url is required"})
-            return
-        if not self._sync_player_available:
-            if prepare:
-                self._send(
-                    result_type,
-                    {"reply_to": reply_to, "ok": False, "error": "synchronized playback controls are unavailable"},
-                )
-                return
-            self._start_legacy_media(payload, reply_to, url)
-            return
-
-        if self.audio_scene is not None:
-            self._stop_audio_scene(ok=False)
-        if self.overlay_session is not None:
-            self._stop_overlay(ok=False)
-        self._set_music_duck(1.0)
-        if self.media_session is not None:
-            self._stop_media(ok=False)
-        session_id = str(payload.get("session_id") or reply_to or uuid.uuid4().hex).strip()
-        group_id = str(payload.get("group_id") or "").strip()
-        routing = payload.get("routing") if isinstance(payload.get("routing"), dict) else payload
-        channel = str(routing.get("channel") or "stereo").strip().lower()
-        if channel not in _MEDIA_CHANNELS:
-            channel = "stereo"
-        volume = _integer(media.get("volume_percent"), int(round(self.state.volume * 100)), maximum=100)
-        self.state.music_player.set_volume(volume)
-        session = _MediaSession(
-            session_id=session_id,
-            group_id=group_id,
-            reply_to=reply_to,
-            channel=channel,
-            start_position_ms=_integer(media.get("start_position_ms"), maximum=7 * 24 * 60 * 60 * 1000),
-            prepare_requested=prepare,
-            source_url=url,
-            loop=_truthy(media.get("loop")),
-        )
-        self.media_session = session
-        self.media_session_id = session_id
-        self.media_group_id = group_id
-        try:
-            self.state.music_player.prepare_synchronized(
-                url,
-                channel=channel,
-                loop=session.loop,
-                done_callback=lambda: self._media_player_finished(session_id),
-            )
-            session.prepare_task = asyncio.create_task(self._await_media_ready(session))
-        except Exception as exc:  # pylint: disable=broad-except
-            _LOGGER.exception("Unable to prepare synchronized media")
-            self._send(result_type, {"reply_to": reply_to, "ok": False, "error": str(exc) or type(exc).__name__})
-            self._stop_media(ok=False)
-
-    def _start_legacy_media(self, payload: dict[str, Any], reply_to: str, url: str) -> None:
-        media = payload.get("media") if isinstance(payload.get("media"), dict) else payload
-        self.media_session_id = str(payload.get("session_id") or reply_to or uuid.uuid4().hex).strip()
-        self.media_group_id = str(payload.get("group_id") or "").strip()
-        volume = _integer(media.get("volume_percent"), int(round(self.state.volume * 100)), maximum=100)
-        self.state.music_player.set_volume(volume)
-        self.media_started_at = time.monotonic()
-        session_id = self.media_session_id
-        group_id = self.media_group_id
-        self.state.music_player.play(
-            url,
-            done_callback=lambda: self._media_finished(session_id, group_id, True),
-            stop_first=False,
-        )
-        actual_start_us = time.monotonic_ns() // 1000
-        event = {
-            "session_id": session_id,
-            "group_id": group_id,
-            "channel": "stereo",
-            "sample_rate_hz": _MEDIA_SAMPLE_RATE_HZ,
-            "scheduled_start_us": actual_start_us,
-            "actual_start_us": actual_start_us,
-            "late_by_us": 0,
-        }
-        self._send("media.session.start.result", {"reply_to": reply_to, "ok": True, **event})
-        self._send("media.session.started", event)
-
-    async def _await_media_ready(self, session: _MediaSession) -> None:
-        deadline = time.monotonic() + _MEDIA_PREPARE_TIMEOUT_SECONDS
-        seek_applied = session.start_position_ms <= 0
-        stable_ready_samples = 0
-        try:
-            while self.media_session is session and time.monotonic() < deadline:
-                snapshot = self.state.music_player.synchronized_snapshot()
-                if not _truthy(snapshot.get("loaded")):
-                    await asyncio.sleep(0.02)
-                    continue
-                if not seek_applied:
-                    self.state.music_player.seek_synchronized(session.start_position_ms / 1000.0)
-                    seek_applied = True
-                    await asyncio.sleep(0.02)
-                    continue
-                if _truthy(snapshot.get("seeking")):
-                    stable_ready_samples = 0
-                    await asyncio.sleep(0.01)
-                    continue
-
-                buffered_seconds = max(
-                    0.0,
-                    float(snapshot.get("buffered_seconds") or 0.0),
-                )
-                buffered_seconds_known = _truthy(
-                    snapshot.get("buffered_seconds_known")
-                )
-                duration_seconds = max(
-                    0.0,
-                    float(snapshot.get("duration_seconds") or 0.0),
-                )
-                required_buffer_seconds = min(
-                    _MEDIA_PREPARE_MIN_BUFFER_SECONDS,
-                    duration_seconds or _MEDIA_PREPARE_MIN_BUFFER_SECONDS,
-                )
-                player_primed = bool(
-                    _truthy(snapshot.get("paused"))
-                    and (
-                        not buffered_seconds_known
-                        or buffered_seconds >= required_buffer_seconds
-                    )
-                )
-                if session.prepare_requested and not player_primed:
-                    stable_ready_samples = 0
-                    await asyncio.sleep(0.02)
-                    continue
-                stable_ready_samples += 1
-                if (
-                    session.prepare_requested
-                    and stable_ready_samples < _MEDIA_PREPARE_STABLE_SAMPLES
-                ):
-                    await asyncio.sleep(0.02)
-                    continue
-
-                session.prepared = True
-                buffered_frames = int(
-                    buffered_seconds * _MEDIA_SAMPLE_RATE_HZ
-                )
-                ready = {
-                    "reply_to": session.reply_to,
-                    "ok": True,
-                    "session_id": session.session_id,
-                    "group_id": session.group_id,
-                    "channel": session.channel,
-                    "buffered_frames": buffered_frames,
-                    "sample_rate_hz": _MEDIA_SAMPLE_RATE_HZ,
-                    "output_latency_frames": session.output_latency_frames,
-                    "satellite_time_us": time.monotonic_ns() // 1000,
-                }
-                if session.prepare_requested:
-                    self._send("media.session.prepare.result", ready)
-                    session.commit_timeout_task = asyncio.create_task(self._media_commit_timeout(session))
-                else:
-                    self._send("media.session.start.result", ready)
-                    self._schedule_media_start(session, time.monotonic_ns() // 1000)
-                return
-            if self.media_session is session:
-                self._fail_media_prepare(session, "media preparation timed out")
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:  # pylint: disable=broad-except
-            _LOGGER.exception("Synchronized media preparation failed")
-            if self.media_session is session:
-                self._fail_media_prepare(session, str(exc) or type(exc).__name__)
-
-    def _fail_media_prepare(self, session: _MediaSession, error: str) -> None:
-        result_type = "media.session.prepare.result" if session.prepare_requested else "media.session.start.result"
-        self._send(result_type, {"reply_to": session.reply_to, "ok": False, "error": error})
-        self._stop_media(ok=False)
-
-    async def _media_commit_timeout(self, session: _MediaSession) -> None:
-        try:
-            await asyncio.sleep(_MEDIA_COMMIT_TIMEOUT_SECONDS)
-        except asyncio.CancelledError:
-            return
-        if self.media_session is session and not session.committed:
-            self._stop_media(ok=False)
-
-    def _commit_media(self, payload: dict[str, Any], reply_to: str) -> None:
-        session = self.media_session
-        requested_id = str(payload.get("session_id") or "").strip()
-        ok = bool(
-            session is not None
-            and session.prepare_requested
-            and session.prepared
-            and not session.committed
-            and (not requested_id or requested_id == session.session_id)
-        )
-        if not ok or session is None:
-            self._send(
-                "media.session.commit.result",
-                {"reply_to": reply_to, "ok": False, "error": "prepared session not found"},
-            )
-            return
-        start_at_us = _integer(payload.get("start_at_us"), maximum=2**63 - 1)
-        if start_at_us <= 0:
-            start_at_us = time.monotonic_ns() // 1000
-        session.audible_start_us = _integer(
-            payload.get("audible_start_at_us"),
-            start_at_us,
-            maximum=2**63 - 1,
-        )
-        session.output_latency_frames = _integer(
-            payload.get("output_latency_frames"),
-            session.output_latency_frames,
-            maximum=_MEDIA_MAX_OUTPUT_LATENCY_FRAMES,
-        )
-        self._schedule_media_start(session, start_at_us)
-        self._send(
-            "media.session.commit.result",
-            {
-                "reply_to": reply_to,
-                "ok": True,
-                "session_id": session.session_id,
-                "group_id": session.group_id,
-                "start_at_us": start_at_us,
-                "audible_start_at_us": session.audible_start_us,
-                "output_latency_frames": session.output_latency_frames,
-            },
-        )
-
-    def _schedule_media_start(self, session: _MediaSession, start_at_us: int) -> None:
-        session.committed = True
-        session.scheduled_start_us = start_at_us
-        if session.audible_start_us <= 0:
-            session.audible_start_us = start_at_us + int(
-                round(session.output_latency_frames * 1_000_000.0 / _MEDIA_SAMPLE_RATE_HZ)
-            )
-        if session.commit_timeout_task is not None:
-            session.commit_timeout_task.cancel()
-            session.commit_timeout_task = None
-        delay_seconds = max(
-            0.0,
-            (session.scheduled_start_us - (time.monotonic_ns() // 1000))
-            / 1_000_000.0,
-        )
-        session.start_timer = threading.Timer(
-            delay_seconds,
-            self._run_media_start_timer,
-            args=(session,),
-        )
-        session.start_timer.daemon = True
-        session.start_timer.start()
-
-    def _run_media_start_timer(self, session: _MediaSession) -> None:
-        """Resume MPV from a dedicated monotonic timer, outside asyncio stalls."""
-        try:
-            if self.media_session is not session:
-                return
-            # The normal MPV resume path is synchronous and already proven on
-            # the S420. Running it on this dedicated timer thread keeps the
-            # asyncio loop out of the start deadline without relying on
-            # python-mpv's asynchronous command path, which can reject the
-            # pause transition on this runtime and abort both stereo members.
-            self.state.music_player.resume()
-            actual_start_us = time.monotonic_ns() // 1000
-            self._call_soon(
-                self._complete_media_start,
-                session,
-                actual_start_us,
-            )
-        except Exception as exc:  # pylint: disable=broad-except
-            _LOGGER.exception("Unable to queue synchronized media start")
-            self._call_soon(
-                self._fail_scheduled_media_start,
-                session,
-                str(exc) or type(exc).__name__,
-            )
-
-    def _complete_media_start(
-        self,
-        session: _MediaSession,
-        actual_start_us: int,
-    ) -> None:
-        if self.media_session is not session:
-            return
-        try:
-            session.actual_start_us = actual_start_us
-            session.started = True
-            session.last_render_progress_at = time.monotonic()
-            self.media_started_at = session.actual_start_us / 1_000_000.0
-            event = {
-                "session_id": session.session_id,
-                "group_id": session.group_id,
-                "channel": session.channel,
-                "sample_rate_hz": _MEDIA_SAMPLE_RATE_HZ,
-                "scheduled_start_us": session.scheduled_start_us,
-                "actual_start_us": session.actual_start_us,
-                "late_by_us": session.actual_start_us - session.scheduled_start_us,
-            }
-            self._send("media.session.started", event)
-            session.playhead_task = asyncio.create_task(self._report_media_playhead(session))
-        except Exception:  # pylint: disable=broad-except
-            _LOGGER.exception("Unable to start synchronized media")
-            if self.media_session is session:
-                self._stop_media(ok=False)
-
-    def _fail_scheduled_media_start(self, session: _MediaSession, error: str) -> None:
-        if self.media_session is session:
-            self._send(
-                "log",
-                {
-                    "level": "warn",
-                    "message": f"Synchronized media could not start: {error}.",
-                },
-            )
-            self._stop_media(ok=False)
-
-    async def _report_media_playhead(self, session: _MediaSession) -> None:
-        try:
-            while self.media_session is session and session.started:
-                await asyncio.sleep(_MEDIA_PLAYHEAD_INTERVAL_SECONDS)
-                if self.media_session is not session:
-                    return
-                snapshot = self.state.music_player.synchronized_snapshot()
-                now = time.monotonic()
-                now_us = time.monotonic_ns() // 1000
-                raw_rebuffering = _truthy(snapshot.get("rebuffering"))
-                was_rebuffering = session.was_rebuffering
-                if raw_rebuffering and not session.was_rebuffering:
-                    session.underrun_events += 1
-                    session.rebuffer_started_at = now
-                elif (
-                    was_rebuffering
-                    and not raw_rebuffering
-                    and not session.loop
-                    and (session.recovery_task is None or session.recovery_task.done())
-                ):
-                    session.recovery_task = asyncio.create_task(
-                        self._recover_media_timeline(session)
-                    )
-                if not raw_rebuffering:
-                    session.rebuffer_started_at = 0.0
-                session.was_rebuffering = raw_rebuffering
-                rebuffering = raw_rebuffering or session.recovering
-                correction_frames = session.correction_frames_since_report
-                session.correction_frames_since_report = 0
-                source_frames = session.timeline_base_frames + int(
-                    max(0.0, float(snapshot.get("timeline_position_seconds") or snapshot.get("position_seconds") or 0.0))
-                    * _MEDIA_SAMPLE_RATE_HZ
-                )
-                rendered_frames = session.timeline_base_frames + int(
-                    max(0.0, float(snapshot.get("rendered_position_seconds") or snapshot.get("position_seconds") or 0.0))
-                    * _MEDIA_SAMPLE_RATE_HZ
-                )
-                if session.recovering:
-                    session.last_rendered_frames = rendered_frames
-                    session.last_render_progress_at = now
-                elif session.last_rendered_frames < 0:
-                    session.last_rendered_frames = rendered_frames
-                elif rendered_frames != session.last_rendered_frames:
-                    session.last_rendered_frames = rendered_frames
-                    session.last_render_progress_at = now
-
-                stall_reason = ""
-                if (
-                    raw_rebuffering
-                    and session.rebuffer_started_at > 0.0
-                    and now - session.rebuffer_started_at >= _PLAYBACK_STALL_TIMEOUT_SECONDS
-                ):
-                    stall_reason = (
-                        "media buffering did not recover within "
-                        f"{_PLAYBACK_STALL_TIMEOUT_SECONDS:g} seconds"
-                    )
-                elif (
-                    not raw_rebuffering
-                    and not session.recovering
-                    and session.last_render_progress_at > 0.0
-                    and now - session.last_render_progress_at >= _PLAYBACK_STALL_TIMEOUT_SECONDS
-                ):
-                    stall_reason = (
-                        "rendered media stopped advancing for "
-                        f"{_PLAYBACK_STALL_TIMEOUT_SECONDS:g} seconds"
-                    )
-                if stall_reason:
-                    _LOGGER.warning("Playback watchdog stopped %s: %s", session.session_id, stall_reason)
-                    self._send(
-                        "log",
-                        {
-                            "level": "warn",
-                            "message": (
-                                f"Playback watchdog stopped stalled media {session.session_id}: "
-                                f"{stall_reason}."
-                            ),
-                        },
-                    )
-                    self._stop_media(ok=False)
-                    return
-                if session.latency_learning_samples < _MEDIA_LATENCY_LEARN_SAMPLES:
-                    elapsed_frames = int(
-                        round(
-                            max(0, now_us - session.actual_start_us)
-                            * _MEDIA_SAMPLE_RATE_HZ
-                            / 1_000_000.0
-                        )
-                    )
-                    start_position_frames = int(
-                        round(session.start_position_ms * _MEDIA_SAMPLE_RATE_HZ / 1000.0)
-                    )
-                    rendered_elapsed_frames = max(0, rendered_frames - start_position_frames)
-                    observed_latency_frames = elapsed_frames - rendered_elapsed_frames
-                    if 0 < observed_latency_frames <= _MEDIA_MAX_OUTPUT_LATENCY_FRAMES:
-                        session.output_latency_frames = (
-                            observed_latency_frames
-                            if session.latency_learning_samples <= 0
-                            else int(
-                                round(
-                                    ((1.0 - _MEDIA_LATENCY_EMA_ALPHA) * session.output_latency_frames)
-                                    + (_MEDIA_LATENCY_EMA_ALPHA * observed_latency_frames)
-                                )
-                            )
-                        )
-                        session.latency_learning_samples += 1
-                self._send(
-                    "media.session.playhead",
-                    {
-                        "session_id": session.session_id,
-                        "group_id": session.group_id,
-                        "channel": session.channel,
-                        "sample_rate_hz": _MEDIA_SAMPLE_RATE_HZ,
-                        "source_frames": source_frames,
-                        "rendered_frames": rendered_frames,
-                        "output_frames": rendered_frames,
-                        "playback_rate": max(0.995, min(1.005, float(snapshot.get("speed") or 1.0))),
-                        "buffered_frames": int(max(0.0, float(snapshot.get("buffered_seconds") or 0.0)) * _MEDIA_SAMPLE_RATE_HZ),
-                        "satellite_time_us": now_us,
-                        "scheduled_start_us": session.scheduled_start_us,
-                        "audible_start_us": session.audible_start_us,
-                        "output_latency_frames": session.output_latency_frames,
-                        "correction_frames": correction_frames,
-                        "rebuffering": rebuffering,
-                        "underrun_events": session.underrun_events,
-                        "rejoin_count": session.rejoin_count,
-                        "rejoin_frames": session.rejoin_frames,
-                    },
-                )
-        except asyncio.CancelledError:
-            return
-        except Exception:  # pylint: disable=broad-except
-            _LOGGER.exception("Unable to report synchronized media playhead")
-            if self.media_session is session:
-                self._send(
-                    "log",
-                    {
-                        "level": "warn",
-                        "message": "Playback watchdog reset media after its render clock failed.",
-                    },
-                )
-                self._stop_media(ok=False)
-
-    async def _recover_media_timeline(self, session: _MediaSession) -> None:
-        """Rejoin the shared audible timeline after an mpv cache underrun."""
-        try:
-            session.recovering = True
-            while (
-                self.media_session is session
-                and (
-                    (self.overlay_session is not None and not self.overlay_session.finished)
-                    or (self.audio_scene is not None and not self.audio_scene.finished)
-                )
-            ):
-                await asyncio.sleep(0.05)
-            if self.media_session is not session or not session.started:
-                return
-
-            now_us = time.monotonic_ns() // 1000
-            audible_start_us = session.audible_start_us or session.actual_start_us
-            expected_frames = int(
-                round(session.start_position_ms * _MEDIA_SAMPLE_RATE_HZ / 1000.0)
-            ) + int(
-                round(
-                    max(0, now_us - audible_start_us)
-                    * _MEDIA_SAMPLE_RATE_HZ
-                    / 1_000_000.0
-                )
-            )
-            snapshot = self.state.music_player.synchronized_snapshot()
-            current_frames = session.timeline_base_frames + int(
-                max(
-                    0.0,
-                    float(
-                        snapshot.get("timeline_position_seconds")
-                        or snapshot.get("position_seconds")
-                        or 0.0
-                    ),
-                )
-                * _MEDIA_SAMPLE_RATE_HZ
-            )
-            skipped_frames = expected_frames - current_frames
-            if skipped_frames <= _MEDIA_RECOVERY_THRESHOLD_FRAMES:
-                return
-
-            prior_duck = self._music_duck_factor
-            await self._ramp_music_duck(0.0, int(_MEDIA_RECOVERY_FADE_SECONDS * 1000))
-            pause = getattr(self.state.music_player, "pause", None)
-            if callable(pause):
-                pause()
-
-            target_seconds = expected_frames / _MEDIA_SAMPLE_RATE_HZ
-            local_target_seconds = max(
-                0.0,
-                (expected_frames - session.timeline_base_frames) / _MEDIA_SAMPLE_RATE_HZ,
-            )
-            seek_ok = False
-            try:
-                self.state.music_player.seek_synchronized(local_target_seconds)
-                deadline = time.monotonic() + _MEDIA_RECOVERY_SEEK_TIMEOUT_SECONDS
-                while self.media_session is session and time.monotonic() < deadline:
-                    seek_snapshot = self.state.music_player.synchronized_snapshot()
-                    local_frames = int(
-                        max(
-                            0.0,
-                            float(
-                                seek_snapshot.get("timeline_position_seconds")
-                                or seek_snapshot.get("position_seconds")
-                                or 0.0
-                            ),
-                        )
-                        * _MEDIA_SAMPLE_RATE_HZ
-                    )
-                    if (
-                        not _truthy(seek_snapshot.get("seeking"))
-                        and abs(local_frames - int(round(local_target_seconds * _MEDIA_SAMPLE_RATE_HZ)))
-                        <= _MEDIA_RECOVERY_THRESHOLD_FRAMES
-                    ):
-                        seek_ok = True
-                        break
-                    await asyncio.sleep(0.02)
-            except Exception:  # pylint: disable=broad-except
-                _LOGGER.debug("Exact media seek failed; reloading from Tater timeline", exc_info=True)
-
-            if not seek_ok:
-                recovery_url = self._url_with_start(session.source_url, target_seconds)
-                self.state.music_player.prepare_synchronized(
-                    recovery_url,
-                    channel=session.channel,
-                    loop=False,
-                    done_callback=lambda: self._media_player_finished(session.session_id),
-                )
-                await self._wait_player_ready(
-                    self.state.music_player,
-                    _MEDIA_RECOVERY_SEEK_TIMEOUT_SECONDS,
-                )
-                session.timeline_base_frames = expected_frames
-
-            if self.media_session is not session:
-                return
-            self.state.music_player.resume()
-            await self._ramp_music_duck(prior_duck, int(_MEDIA_RECOVERY_FADE_SECONDS * 1000))
-            session.rejoin_count += 1
-            session.rejoin_frames += max(0, skipped_frames)
-        except asyncio.CancelledError:
-            raise
-        except Exception:  # pylint: disable=broad-except
-            _LOGGER.exception("Unable to rejoin synchronized media after an underrun")
-            if self.media_session is session:
-                self._set_music_duck(1.0)
-                try:
-                    self.state.music_player.resume()
-                except Exception:  # pylint: disable=broad-except
-                    _LOGGER.exception("Unable to resume media after recovery failure")
-        finally:
-            session.recovering = False
-
-    def _adjust_media(self, payload: dict[str, Any], reply_to: str) -> None:
-        session = self.media_session
-        requested_id = str(payload.get("session_id") or "").strip()
-        mode = str(payload.get("mode") or "slew").strip().lower()
-        correction_limit = _MEDIA_SAMPLE_RATE_HZ * 2 if mode == "jump" else 480
-        correction_frames = _signed_integer(
-            payload.get("correction_frames"),
-            limit=correction_limit,
-        )
-        ok = bool(
-            self._sync_player_available
-            and session is not None
-            and session.started
-            and (not requested_id or requested_id == session.session_id)
-        )
-        if not ok or session is None:
-            self._send("media.session.adjust.result", {"reply_to": reply_to, "ok": False, "error": "session not found"})
-            return
-        if mode == "jump":
-            self.state.music_player.jump_synchronized(
-                correction_frames / float(_MEDIA_SAMPLE_RATE_HZ)
-            )
-            session.correction_frames_since_report += correction_frames
-            self._send(
-                "media.session.adjust.result",
-                {
-                    "reply_to": reply_to,
-                    "ok": True,
-                    "session_id": session.session_id,
-                    "correction_frames": correction_frames,
-                    "settle_ms": 0,
-                    "mode": "jump",
-                },
-            )
-            return
-        settle_ms = _integer(payload.get("settle_ms"), 1000, minimum=100, maximum=10000)
-        if session.adjust_task is not None:
-            session.adjust_task.cancel()
-        speed = 1.0 + (correction_frames / (_MEDIA_SAMPLE_RATE_HZ * (settle_ms / 1000.0)))
-        self.state.music_player.set_synchronized_speed(speed)
-        session.correction_frames_since_report += correction_frames
-        session.adjust_task = asyncio.create_task(self._finish_media_slew(session, settle_ms))
-        self._send(
-            "media.session.adjust.result",
-            {
-                "reply_to": reply_to,
-                "ok": True,
-                "session_id": session.session_id,
-                "correction_frames": correction_frames,
-                "settle_ms": settle_ms,
-            },
-        )
-
-    async def _finish_media_slew(self, session: _MediaSession, settle_ms: int) -> None:
-        try:
-            await asyncio.sleep(settle_ms / 1000.0)
-        except asyncio.CancelledError:
-            return
-        if self.media_session is session:
-            self.state.music_player.set_synchronized_speed(1.0)
-
-    def _media_player_finished(self, session_id: str) -> None:
-        loop = getattr(self.client, "_loop", None)
-        if loop is not None and not loop.is_closed():
-            loop.call_soon_threadsafe(self._media_finished, session_id, "", True)
-            return
-        self._media_finished(session_id, "", True)
-
-    def _cancel_media_tasks(self, session: _MediaSession) -> None:
-        try:
-            current = asyncio.current_task()
-        except RuntimeError:
-            current = None
-        for task in (
-            session.prepare_task,
-            session.commit_timeout_task,
-            session.playhead_task,
-            session.adjust_task,
-            session.recovery_task,
-        ):
-            if task is not None and task is not current and not task.done():
-                task.cancel()
-        if session.start_timer is not None:
-            session.start_timer.cancel()
-            session.start_timer = None
-
-    def _media_finished(self, session_id: str, group_id: str, ok: bool) -> None:
-        session = self.media_session
-        if session is not None:
-            if session.session_id != session_id:
-                return
-            group_id = session.group_id
-            self._cancel_media_tasks(session)
-            self.media_session = None
-            try:
-                self.state.music_player.reset_synchronized()
-            except Exception:  # pylint: disable=broad-except
-                _LOGGER.exception("Unable to reset synchronized player")
-        elif self.media_session_id != session_id:
-            return
-        self.media_session_id = ""
-        self.media_group_id = ""
-        self._send("media.session.finished", {"session_id": session_id, "group_id": group_id, "ok": ok})
-
-    def _stop_media(self, *, ok: bool, notify: bool = True) -> None:
-        if self.overlay_session is not None:
-            self._stop_overlay(ok=False, notify=notify)
-        session = self.media_session
-        session_id = self.media_session_id
-        group_id = self.media_group_id
-        if not session_id:
-            return
-        if session is not None:
-            self._cancel_media_tasks(session)
-        self.media_session = None
-        self.media_session_id = ""
-        self.media_group_id = ""
-        try:
-            if self._sync_player_available:
-                self.state.music_player.reset_synchronized()
-            self.state.music_player.stop()
-        except Exception:  # pylint: disable=broad-except
-            _LOGGER.exception("Unable to stop media player")
-        if notify:
-            self._send("media.session.finished", {"session_id": session_id, "group_id": group_id, "ok": ok})
-
-    def _set_media_volume(self, payload: dict[str, Any], reply_to: str) -> None:
-        session_id = str(payload.get("session_id") or "").strip()
-        ok = bool(self.media_session_id and (not session_id or session_id == self.media_session_id))
-        if ok:
-            self.state.music_player.set_volume(_integer(payload.get("volume_percent"), 100, maximum=100))
-        self._send("media.session.volume.result", {"reply_to": reply_to, "ok": ok, "error": "" if ok else "session not found"})
-
     def _start_overlay(self, payload: dict[str, Any]) -> None:
         foreground = payload.get("foreground") if isinstance(payload.get("foreground"), dict) else payload
         ducking = payload.get("ducking") if isinstance(payload.get("ducking"), dict) else {}
@@ -2350,11 +1575,7 @@ class TaterFeatureManager:
                     done_callback=finished,
                 )
                 await self._wait_player_ready(self.state.tts_player, _AUDIO_PREPARE_TIMEOUT_SECONDS)
-                output_latency_frames = (
-                    self.media_session.output_latency_frames
-                    if self.media_session is not None
-                    else _MEDIA_DEFAULT_OUTPUT_LATENCY_FRAMES
-                )
+                output_latency_frames = _MEDIA_DEFAULT_OUTPUT_LATENCY_FRAMES
                 latency_us = int(
                     round(output_latency_frames * 1_000_000.0 / _MEDIA_SAMPLE_RATE_HZ)
                 )
@@ -2486,8 +1707,6 @@ class TaterFeatureManager:
             self._stop_audio_scene(ok=False)
         if self.overlay_session is not None:
             self._stop_overlay(ok=False)
-        if self.media_session_id:
-            self._stop_media(ok=False)
         self._scene_generation += 1
         scene = _AudioScene(
             scene_id=scene_id,
@@ -2716,8 +1935,6 @@ class TaterFeatureManager:
             self._stop_audio_scene(ok=False, notify=False)
         if self.overlay_session is not None:
             self._stop_overlay(ok=False, notify=False)
-        if self.media_session_id:
-            self._stop_media(ok=False, notify=False)
         for timer in self.timers.values():
             if timer.task is not None:
                 timer.task.cancel()

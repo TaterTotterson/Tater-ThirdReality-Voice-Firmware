@@ -1,0 +1,25 @@
+config BR2_PACKAGE_SENDSPIN_CLIENT
+	bool "Sendspin client"
+	depends on BR2_USE_MMU
+	depends on BR2_USE_WCHAR
+	depends on BR2_TOOLCHAIN_HAS_THREADS
+	depends on BR2_INSTALL_LIBSTDCPP
+	depends on !BR2_STATIC_LIBS
+	depends on BR2_PACKAGE_PULSEAUDIO_HAS_ATOMIC
+	select BR2_PACKAGE_AVAHI
+	select BR2_PACKAGE_AVAHI_DAEMON
+	select BR2_PACKAGE_AVAHI_LIBDNSSD_COMPATIBILITY
+	select BR2_PACKAGE_DBUS
+	select BR2_PACKAGE_PULSEAUDIO
+	help
+	  Headless Sendspin v1 player built from the official sendspin-cpp
+	  implementation. It exposes this device to Tater, Music Assistant,
+	  and other Sendspin servers with synchronized PCM/FLAC playback.
+
+	  https://github.com/Sendspin/sendspin-cpp-cli
+
+comment "Sendspin client needs a toolchain w/ C++, wchar, threads, dynamic library"
+	depends on BR2_USE_MMU
+	depends on !BR2_INSTALL_LIBSTDCPP || !BR2_USE_WCHAR \
+		|| !BR2_TOOLCHAIN_HAS_THREADS || !BR2_PACKAGE_PULSEAUDIO_HAS_ATOMIC \
+		|| BR2_STATIC_LIBS

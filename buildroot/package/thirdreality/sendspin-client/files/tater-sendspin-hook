@@ -1,0 +1,10 @@
+#!/bin/sh
+
+case "$1" in
+    start)
+        : > /tmp/tater-sendspin-playing
+        ;;
+    stop)
+        rm -f /tmp/tater-sendspin-playing
+        ;;
+esac

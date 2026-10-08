@@ -136,6 +136,34 @@ class BridgeHelpersTest(unittest.TestCase):
             self.assertNotEqual(colors[0], "000000")
             self.assertEqual(colors[1:], ["000000"] * 11)
 
+    def test_no_animation_is_accepted_and_keeps_the_status_light_dark(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = Path(temp_dir) / "settings.json"
+            config.write_text(
+                json.dumps(
+                    {
+                        "led_listening_animation": "off",
+                        "led_thinking_animation": "off",
+                        "led_tool_call_animation": "off",
+                        "led_replying_animation": "off",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            settings = bridge_module.read_led_settings(config)
+
+        for key in (
+            "led_listening_animation",
+            "led_thinking_animation",
+            "led_tool_call_animation",
+            "led_replying_animation",
+        ):
+            self.assertEqual(settings[key], "off")
+
+        lines = bridge_module.animation_text("off", "#ff5a1f", 80).strip().splitlines()
+        self.assertEqual(lines[0], "loop")
+        self.assertEqual(lines[1].split(":", 1)[1].split(","), ["000000"] * 12)
+
     def test_write_tater_animations_creates_all_pipeline_states(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             directory = Path(temp_dir)

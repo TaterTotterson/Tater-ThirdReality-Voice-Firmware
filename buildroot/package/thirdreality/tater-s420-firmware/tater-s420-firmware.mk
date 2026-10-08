@@ -4,12 +4,12 @@
 #
 ################################################################################
 
-TATER_S420_FIRMWARE_VERSION = 0.2.20
+TATER_S420_FIRMWARE_VERSION = 0.2.21
 TATER_S420_FIRMWARE_SITE = $(TOPDIR)/package/thirdreality/tater-s420-firmware
 TATER_S420_FIRMWARE_SITE_METHOD = local
 
 TATER_S420_FIRMWARE_INSTALL_TARGET = YES
-TATER_S420_FIRMWARE_DEPENDENCIES = tater-linux-satellite
+TATER_S420_FIRMWARE_DEPENDENCIES = tater-linux-satellite sendspin-client
 
 REALITY_DIR = $(TARGET_DIR)/usr/share/thirdreality
 

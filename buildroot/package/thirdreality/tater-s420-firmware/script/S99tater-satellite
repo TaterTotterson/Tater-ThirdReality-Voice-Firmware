@@ -5,6 +5,7 @@
 # Manages:
 #   - Tater setup AP   (first boot or physical setup reset)
 #   - netmonitor       (WiFi/internet connectivity state machine)
+#   - Sendspin player  (/usr/bin/tater-sendspin)
 #   - voice-assistant  (/usr/bin/tater-satellite)
 #   - hardware-bridge  (/usr/bin/tater-thirdreality-bridge)
 #   - pulseaudio       (reboot device if it dies)
@@ -13,15 +14,17 @@
 #   S99tater-satellite start|stop|restart
 #   S99tater-satellite <service> start|stop|restart
 #
-# Services: netmonitor, voice-assistant, hardware-bridge
+# Services: netmonitor, sendspin, voice-assistant, hardware-bridge
 
 PIDDIR=/var/run/thirdreality
 MONITOR_PIDFILE=$PIDDIR/tater-satellite.pid
 NETMONITOR_PIDFILE=$PIDDIR/netmonitor.pid
+SENDSPIN_PIDFILE=$PIDDIR/sendspin.pid
 VOICE_PIDFILE=$PIDDIR/voice-assistant.pid
 BRIDGE_PIDFILE=$PIDDIR/hardware-bridge.pid
 
 VOICE_ASSISTANT=/usr/bin/tater-satellite
+SENDSPIN_PLAYER=/usr/bin/tater-sendspin
 HARDWARE_BRIDGE=/usr/bin/tater-thirdreality-bridge
 PROVISIONING=/usr/bin/tater-provisioning
 PROVISIONING_MARKER=/tmp/tater-provisioning-active
@@ -32,6 +35,7 @@ CHECK_INTERVAL=10
 # Created by:  S99tater-satellite <service> stop
 # Removed by:  S99tater-satellite <service> start
 DISABLE_NETMONITOR=/tmp/tater_disable_netmonitor
+DISABLE_SENDSPIN=/tmp/tater_disable_sendspin
 DISABLE_VOICE=/tmp/tater_disable_voice
 DISABLE_BRIDGE=/tmp/tater_disable_bridge
 
@@ -61,6 +65,28 @@ stop_netmonitor() {
         kill "$(cat "$NETMONITOR_PIDFILE")" 2>/dev/null
     fi
     rm -f "$NETMONITOR_PIDFILE"
+}
+
+# ---------------------------------------------------------------------------
+# Sendspin player
+# ---------------------------------------------------------------------------
+
+start_sendspin() {
+    is_running "$SENDSPIN_PIDFILE" && return 0
+    rm -f "$SENDSPIN_PIDFILE" "$DISABLE_SENDSPIN" /tmp/tater-sendspin-playing
+    "$SENDSPIN_PLAYER" &
+    echo $! > "$SENDSPIN_PIDFILE"
+}
+
+stop_sendspin() {
+    touch "$DISABLE_SENDSPIN"
+    if is_running "$SENDSPIN_PIDFILE"; then
+        pid=$(cat "$SENDSPIN_PIDFILE")
+        kill "$pid" 2>/dev/null
+        sleep 1
+        kill -9 "$pid" 2>/dev/null || true
+    fi
+    rm -f "$SENDSPIN_PIDFILE" /tmp/tater-sendspin-playing
 }
 
 # ---------------------------------------------------------------------------
@@ -115,19 +141,25 @@ monitor_loop() {
             start_netmonitor
         fi
 
-        # 2. voice-assistant
+        # 2. Sendspin player
+        if [ ! -f "$DISABLE_SENDSPIN" ] && ! is_running "$SENDSPIN_PIDFILE"; then
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] Sendspin player not running, restarting..."
+            start_sendspin
+        fi
+
+        # 3. voice-assistant
         if [ ! -f "$DISABLE_VOICE" ] && ! is_running "$VOICE_PIDFILE"; then
             echo "[$(date '+%Y-%m-%d %H:%M:%S')] voice-assistant not running, restarting..."
             start_voice_assistant
         fi
 
-        # 3. hardware bridge
+        # 4. hardware bridge
         if [ ! -f "$DISABLE_BRIDGE" ] && ! is_running "$BRIDGE_PIDFILE"; then
             echo "[$(date '+%Y-%m-%d %H:%M:%S')] hardware bridge not running, restarting..."
             start_hardware_bridge
         fi
 
-        # 4. pulseaudio
+        # 5. pulseaudio
         if ! pidof pulseaudio > /dev/null 2>&1; then
             echo "[$(date '+%Y-%m-%d %H:%M:%S')] pulseaudio died, rebooting..."
             sync
@@ -179,6 +211,7 @@ start() {
 
     start_netmonitor
     start_hardware_bridge
+    start_sendspin
     start_voice_assistant
 
     monitor_loop &
@@ -199,10 +232,11 @@ stop() {
         "$PROVISIONING" stop
     fi
     stop_voice_assistant
+    stop_sendspin
     stop_hardware_bridge
     stop_netmonitor
     # Clear disable flags so next start brings everything up
-    rm -f "$DISABLE_NETMONITOR" "$DISABLE_VOICE" "$DISABLE_BRIDGE"
+    rm -f "$DISABLE_NETMONITOR" "$DISABLE_SENDSPIN" "$DISABLE_VOICE" "$DISABLE_BRIDGE"
 }
 
 restart() {
@@ -227,6 +261,14 @@ service_cmd() {
                 *) echo "Usage: $0 netmonitor {start|stop|restart}"; exit 1 ;;
             esac
             ;;
+        sendspin)
+            case "$action" in
+                start)   start_sendspin ;;
+                stop)    stop_sendspin ;;
+                restart) stop_sendspin; start_sendspin ;;
+                *) echo "Usage: $0 sendspin {start|stop|restart}"; exit 1 ;;
+            esac
+            ;;
         voice-assistant)
             case "$action" in
                 start)   start_voice_assistant ;;
@@ -245,7 +287,7 @@ service_cmd() {
             ;;
         *)
             echo "Unknown service: $svc"
-            echo "Services: netmonitor, voice-assistant, hardware-bridge"
+            echo "Services: netmonitor, sendspin, voice-assistant, hardware-bridge"
             exit 1
             ;;
     esac
@@ -259,12 +301,12 @@ case "$1" in
     start)   start   ;;
     stop)    stop    ;;
     restart) restart ;;
-    netmonitor|voice-assistant|hardware-bridge)
+    netmonitor|sendspin|voice-assistant|hardware-bridge)
         service_cmd "$1" "$2"
         ;;
     *)
         echo "Usage: $0 {start|stop|restart}"
-        echo "       $0 {netmonitor|voice-assistant|hardware-bridge} {start|stop|restart}"
+        echo "       $0 {netmonitor|sendspin|voice-assistant|hardware-bridge} {start|stop|restart}"
         exit 1
         ;;
 esac

@@ -64,7 +64,7 @@ TATER_LED_DEFAULTS: dict[str, Any] = {
     "led_tool_call_animation": "heartbeat",
     "led_replying_animation": "audio_glow",
 }
-TATER_LED_STYLES = {"audio_glow", "pulse", "breathe", "heartbeat", "solid"}
+TATER_LED_STYLES = {"off", "audio_glow", "pulse", "breathe", "heartbeat", "solid"}
 PIPELINE_ACTIVE_EVENTS = {
     "wake_word_detected",
     "listening",
@@ -245,6 +245,7 @@ def write_status_light(
 def animation_text(style: str, color: str, brightness: int) -> str:
     """Create an S420 animation using only its visible center status light."""
     patterns: dict[str, list[tuple[int, float]]] = {
+        "off": [(1000, 0.0)],
         # The bridge replaces this low fallback frame with live speaker RMS.
         "audio_glow": [(250, 0.08)],
         "pulse": [(55, value) for value in (0.12, 0.28, 0.52, 0.78, 1.0, 0.78, 0.52, 0.28)],

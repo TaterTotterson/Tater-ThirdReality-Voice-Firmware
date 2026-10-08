@@ -1,0 +1,50 @@
+#!/bin/sh
+set -eu
+
+CONFIG=/data/conf/tater.json
+DEVICE_CONFIG=/data/conf/device.json
+LIVE_SETTINGS=/data/conf/tater-live-settings.json
+STATE_DIR=/data/conf/sendspin
+CONTROL_SOCKET=/var/run/thirdreality/sendspin.sock
+
+json_value() {
+    file="$1"
+    expression="$2"
+    [ -s "$file" ] || return 0
+    jq -r "$expression // empty" "$file" 2>/dev/null || true
+}
+
+FRIENDLY_NAME=$(json_value "$CONFIG" '.name')
+OUTPUT_CHANNEL=$(json_value "$LIVE_SETTINGS" '.output_channel_mode')
+
+if [ -z "$FRIENDLY_NAME" ]; then
+    FRIENDLY_NAME=$(json_value "$DEVICE_CONFIG" '.device.name')
+fi
+[ -n "$FRIENDLY_NAME" ] || FRIENDLY_NAME="Tater ThirdReality Speaker"
+
+case "$OUTPUT_CHANNEL" in
+    stereo|left|right|mono) ;;
+    *) OUTPUT_CHANNEL=stereo ;;
+esac
+
+mkdir -p "$STATE_DIR" "$(dirname "$CONTROL_SOCKET")"
+chmod 700 "$STATE_DIR"
+rm -f "$CONTROL_SOCKET" /tmp/tater-sendspin-playing
+
+export TATER_SENDSPIN_OUTPUT_CHANNEL="$OUTPUT_CHANNEL"
+export PULSE_PROP="application.name=Tater-Sendspin media.role=music"
+
+exec /usr/bin/sendspin-cli \
+    --name "$FRIENDLY_NAME" \
+    --mdns-name "$FRIENDLY_NAME" \
+    --manufacturer Tater \
+    --product-name "Tater ThirdReality S420" \
+    --port 8928 \
+    --output pulse \
+    --buffer-ms 160 \
+    --audio-format pcm:48000:16:2,flac:48000:16:2 \
+    --allow-unpaired \
+    --state-dir "$STATE_DIR" \
+    --control-socket "$CONTROL_SOCKET" \
+    --hook-start "/usr/bin/tater-sendspin-hook start" \
+    --hook-stop "/usr/bin/tater-sendspin-hook stop"
