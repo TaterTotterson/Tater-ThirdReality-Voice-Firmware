@@ -43,6 +43,25 @@ def _check_legacy_music_assistant_noise_handshake_is_accepted() -> None:
     assert "explicit unknown category remains malformed" in patch
 
 
+def _check_music_assistant_player_schema_is_emitted() -> None:
+    patch = (PACKAGE / "0004-match-aiosendspin-9-1-1-player-wire.patch").read_text()
+
+    assert 'methods_list.add<JsonObject>()' in patch
+    assert 'method_obj["method"]' in patch
+    assert "desc.method != SendspinPairMethod::PAIRING_PSK" in patch
+    assert 'commands.add("volume")' in patch
+    assert 'commands.add("mute")' in patch
+    assert 'root["payload"]["player"]["static_delay_ms"]' in patch
+    assert '"set_static_delay"' in patch
+    assert "if (cmd == SendspinPlayerCommand::SET_OUTPUT_DELAY)" in patch
+
+    command_patch = (
+        PACKAGE / "0005-accept-aiosendspin-static-delay-command.patch"
+    ).read_text()
+    assert 'command_str == "set_static_delay"' in command_patch
+    assert 'player_object["static_delay_ms"]' in command_patch
+
+
 def _check_runtime_exposes_full_sendspin_player() -> None:
     wrapper = (PACKAGE / "files/tater-sendspin").read_text()
     supervisor = (
@@ -97,6 +116,9 @@ class SendspinIntegrationTests(unittest.TestCase):
 
     def test_legacy_music_assistant_noise_handshake_is_accepted(self) -> None:
         _check_legacy_music_assistant_noise_handshake_is_accepted()
+
+    def test_music_assistant_player_schema_is_emitted(self) -> None:
+        _check_music_assistant_player_schema_is_emitted()
 
     def test_stereo_pair_routing_is_applied_in_pulse_sink(self) -> None:
         _check_stereo_pair_routing_is_applied_in_pulse_sink()
