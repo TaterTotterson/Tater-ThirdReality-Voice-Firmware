@@ -1,0 +1,65 @@
+From 8db4c52df469a95a69f0867654c58052bdbdf2ec Mon Sep 17 00:00:00 2001
+From: Codex Integration <codex@local>
+Date: Sat, 10 Oct 2026 12:00:00 -0500
+Subject: [PATCH] add ONNX dual wake arbitration
+
+Keep the existing S420 beamformed microphone path and fan it out once to the
+microWakeWord detector and the asynchronous Tater ONNX worker. The feature
+manager owns detector selection and the bounded agreement gate.
+---
+ linux_voice_assistant/__main__.py | 23 ++++++++++++++++++-----
+ 1 file changed, 18 insertions(+), 5 deletions(-)
+
+diff --git a/linux_voice_assistant/__main__.py b/linux_voice_assistant/__main__.py
+--- a/linux_voice_assistant/__main__.py
++++ b/linux_voice_assistant/__main__.py
+@@ -666,6 +666,10 @@ def process_audio(
+                 if state.satellite is None or not hasattr(state.satellite, "_is_streaming_audio"):
+                     continue
+ 
++                tater_features = getattr(state.satellite, "_tater_features", None)
++                if tater_features is not None and not state.muted:
++                    tater_features.submit_wake_audio(audio_chunk)
++
+                 # WAKE WORD
+                 if (not wake_words_initialized) or state.wake_words_changed:
+                     # Update list of wake word models to process
+@@ -781,14 +785,19 @@ def process_audio(
+                         if isinstance(wake_word, MicroWakeWord):
+                             # No debugging when no detection
+                             wake_word.debug_probabilities = False
++                            is_stop_word = (
++                                wake_word is state.stop_word
++                                or wake_word.id == state.stop_word.id
++                            )
+ 
+                             # set microWakeWord cutoff
+                             wake_word.probability_cutoff = threshold
+ 
+-                            for micro_input in micro_inputs:
+-                                if wake_word.process_streaming(micro_input):
+-                                    wake_word.debug_probabilities = True
+-                                    activated = True
++                            if is_stop_word or tater_features is None or tater_features.wake_mww_enabled():
++                                for micro_input in micro_inputs:
++                                    if wake_word.process_streaming(micro_input):
++                                        wake_word.debug_probabilities = True
++                                        activated = True
+                         elif isinstance(wake_word, OpenWakeWord):
+                             for oww_input in oww_inputs:
+                                 for prob in wake_word.process_streaming(oww_input):
+@@ -796,6 +805,12 @@ def process_audio(
+                                         _LOGGER.debug("Wake word '%s' activated (probability %.3f exceeded threshold %.3f)", wake_word.wake_word, prob, threshold)  # type: ignore[attr-defined]
+                                         activated = True
+ 
++                        if (
++                            tater_features is not None
++                            and isinstance(wake_word, MicroWakeWord)
++                            and not is_stop_word
++                        ):
++                            activated = tater_features.resolve_wake_detection(activated)
+                         if activated and not state.muted:
+                             # Check refractory
+                             now = time.monotonic()
+-- 
+2.46.0

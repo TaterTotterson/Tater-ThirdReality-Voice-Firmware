@@ -1,0 +1,2 @@
+# Locally verified against the Microsoft ONNX Runtime v1.22.0 release asset.
+sha256  bb76395092d150b52c7092dc6b8f2fe4d80f0f3bf0416d2f269193e347e24702  onnxruntime-linux-aarch64-1.22.0.tgz

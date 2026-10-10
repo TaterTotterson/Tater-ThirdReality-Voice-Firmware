@@ -12,6 +12,7 @@ TATER_LINUX_SATELLITE_LICENSE_FILES = LICENSE
 TATER_LINUX_SATELLITE_SETUP_TYPE = pep517
 
 TATER_LINUX_SATELLITE_DEPENDENCIES = \
+	onnxruntime-aarch64 \
 	python-tater-protocol-compat \
 	python-getmac \
 	python-mpv \
@@ -41,9 +42,18 @@ define TATER_LINUX_SATELLITE_USE_TATER_PROTOCOL_COMPAT
 endef
 TATER_LINUX_SATELLITE_POST_PATCH_HOOKS += TATER_LINUX_SATELLITE_USE_TATER_PROTOCOL_COMPAT
 
+define TATER_LINUX_SATELLITE_BUILD_OWW_BRIDGE
+	$(TARGET_CC) $(TARGET_CFLAGS) -O2 -fPIC -shared \
+		-I$(STAGING_DIR)/usr/include/onnxruntime \
+		$(TATER_LINUX_SATELLITE_PKGDIR)/files/tater_oww_ort.c \
+		-ldl -lm -o $(@D)/libtater_oww_ort.so
+endef
+TATER_LINUX_SATELLITE_POST_BUILD_HOOKS += TATER_LINUX_SATELLITE_BUILD_OWW_BRIDGE
+
 define TATER_LINUX_SATELLITE_INSTALL_RESOURCES
 	mkdir -p $(TATER_LINUX_SATELLITE_PYTHON_SITE)/wakewords
 	mkdir -p $(TATER_LINUX_SATELLITE_PYTHON_SITE)/sounds
+	mkdir -p $(TARGET_DIR)/usr/share/tater/openwakeword
 	cp -a $(@D)/wakewords/. $(TATER_LINUX_SATELLITE_PYTHON_SITE)/wakewords/
 	cp -a $(@D)/sounds/. $(TATER_LINUX_SATELLITE_PYTHON_SITE)/sounds/
 	cp -a $(TATER_LINUX_SATELLITE_PKGDIR)/files/wake_sounds/. \
@@ -56,6 +66,12 @@ define TATER_LINUX_SATELLITE_INSTALL_RESOURCES
 		\( -name 'hey_home_assistant.*' -o -iname '*nabu*' \) -delete
 	$(INSTALL) -D -m 0644 $(TATER_LINUX_SATELLITE_PKGDIR)/files/tater_features.py \
 		$(TATER_LINUX_SATELLITE_PYTHON_SITE)/linux_voice_assistant/tater_features.py
+	$(INSTALL) -D -m 0644 $(TATER_LINUX_SATELLITE_PKGDIR)/files/tater_oww_onnx.py \
+		$(TATER_LINUX_SATELLITE_PYTHON_SITE)/linux_voice_assistant/tater_oww_onnx.py
+	$(INSTALL) -D -m 0755 $(@D)/libtater_oww_ort.so \
+		$(TARGET_DIR)/usr/lib/libtater_oww_ort.so
+	cp -a $(TATER_LINUX_SATELLITE_PKGDIR)/files/openwakeword/. \
+		$(TARGET_DIR)/usr/share/tater/openwakeword/
 	$(INSTALL) -D -m 0644 $(TATER_LINUX_SATELLITE_PKGDIR)/files/s420_audio.py \
 		$(TATER_LINUX_SATELLITE_PYTHON_SITE)/linux_voice_assistant/s420_audio.py
 	$(INSTALL) -D -m 0644 $(TATER_LINUX_SATELLITE_PKGDIR)/files/ble_scanner.py \

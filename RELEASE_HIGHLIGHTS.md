@@ -1,18 +1,11 @@
-- Releases ThirdReality S420 firmware `0.2.21` on top of the production-stability
-  baseline restored in `0.2.20`.
-- Adds the pinned official Sendspin Linux player with local mDNS discovery,
-  encrypted pairing support, unpaired Tater compatibility, and synchronized
-  48 kHz PCM/FLAC playback from Tater, Music Assistant, and other compatible
-  controllers.
-- Adds persistent `stereo`, `left`, `right`, and `mono` output routing for
-  multi-room groups and stereo pairs, and supervises the Sendspin service so it
-  restarts automatically if it exits.
-- Removes the retired Tater `audio.clock.sync` and `media.session.*` playback
-  implementation while retaining native reply TTS, announcements, audio scenes,
-  wake handling, AEC, passive BLE presence, and signed OTA.
-- Adds No Animation for listening, thinking, tool-call, and replying LED states
-  without suppressing setup, error, timer, mute, volume, OTA, or connection
-  indicators.
-- Keeps the `0.2.20` rollback decision: experimental connectable BLE enrollment
-  remains removed while passive, non-connectable BLE presence reporting stays
-  enabled.
+- Releases ThirdReality S420 firmware `0.2.22` with selectable microWakeWord,
+  openWakeWord, and Dual Wake Word modes in Tater's existing wake-word settings.
+- Adds native ARM64 ONNX openWakeWord inference using the S420's existing
+  beamformed microphone stream, without duplicating audio capture or beamforming.
+- Runs one microWakeWord detector and one openWakeWord detector in Dual mode and
+  requires both to agree before opening the microphone, reducing false wakes.
+- Reads each wake model's threshold and patience directly from its published JSON
+  metadata, including separate Dual-mode confirmation tuning.
+- Adds accurate openWakeWord readiness, model source, inference, and error
+  diagnostics while preserving timer stop-wake handling, Sendspin playback, AEC,
+  passive BLE presence, and signed OTA updates.

@@ -2,6 +2,7 @@
 """Fast structural checks for the Tater production defconfig."""
 
 from pathlib import Path
+import hashlib
 import re
 import sys
 
@@ -54,6 +55,30 @@ TATER_WAKE_VERIFIER_PATCH = (
 TATER_S420_AEC_PATCH = (
     ROOT
     / "buildroot/package/thirdreality/tater-linux-satellite/0010-add-s420-playback-reference-aec.patch"
+)
+TATER_ONNX_WAKE_PATCH = (
+    ROOT
+    / "buildroot/package/thirdreality/tater-linux-satellite/0011-add-onnx-dual-wake.patch"
+)
+TATER_OWW_PYTHON = (
+    ROOT
+    / "buildroot/package/thirdreality/tater-linux-satellite/files/tater_oww_onnx.py"
+)
+TATER_OWW_BRIDGE = (
+    ROOT
+    / "buildroot/package/thirdreality/tater-linux-satellite/files/tater_oww_ort.c"
+)
+TATER_OWW_ASSETS = (
+    ROOT
+    / "buildroot/package/thirdreality/tater-linux-satellite/files/openwakeword"
+)
+ONNXRUNTIME_MK = (
+    ROOT
+    / "buildroot/package/thirdreality/onnxruntime-aarch64/onnxruntime-aarch64.mk"
+)
+ONNXRUNTIME_HASH = (
+    ROOT
+    / "buildroot/package/thirdreality/onnxruntime-aarch64/onnxruntime-aarch64.hash"
 )
 WEBRTC_AEC_PATCH = (
     ROOT
@@ -175,6 +200,11 @@ def main() -> int:
     tater_wake_sound_patch = TATER_WAKE_SOUND_PATCH.read_text(encoding="utf-8")
     tater_wake_verifier_patch = TATER_WAKE_VERIFIER_PATCH.read_text(encoding="utf-8")
     tater_s420_aec_patch = TATER_S420_AEC_PATCH.read_text(encoding="utf-8")
+    tater_onnx_wake_patch = TATER_ONNX_WAKE_PATCH.read_text(encoding="utf-8")
+    tater_oww_python = TATER_OWW_PYTHON.read_text(encoding="utf-8")
+    tater_oww_bridge = TATER_OWW_BRIDGE.read_text(encoding="utf-8")
+    onnxruntime_mk = ONNXRUNTIME_MK.read_text(encoding="utf-8")
+    onnxruntime_hash = ONNXRUNTIME_HASH.read_text(encoding="utf-8")
     webrtc_aec_patch = WEBRTC_AEC_PATCH.read_text(encoding="utf-8")
     tater_features = TATER_FEATURES.read_text(encoding="utf-8")
     s420_audio = S420_AUDIO.read_text(encoding="utf-8")
@@ -348,11 +378,61 @@ def main() -> int:
         "wake_environment_profiles",
         "wake_during_playback",
         "playback_reference_aec",
+        "openwakeword",
+        "wake_detector_selection",
+        "dual_wake_confirmation",
         "sendspin_player",
         "sendspin_output_channel_selection",
         "ble_advertisements",
     ):
         require(f'"{capability}": True' in tater_features, f"Tater feature is missing: {capability}", errors)
+    require(
+        "submit_wake_audio(audio_chunk)" in tater_onnx_wake_patch
+        and "resolve_wake_detection(activated)" in tater_onnx_wake_patch,
+        "the one-stream MWW/OWW wake fan-out patch is incomplete",
+        errors,
+    )
+    for primitive in (
+        "class OWWWorker",
+        "queue.Queue(maxsize=2)",
+        "os.sched_setaffinity",
+        "_reset_requested",
+        "tater_oww_push",
+    ):
+        require(primitive in tater_oww_python, f"ONNX OWW worker primitive is missing: {primitive}", errors)
+    for primitive in (
+        "OWW_CHUNK_SAMPLES 1280",
+        "OWW_MEL_WINDOW 76",
+        "OWW_FEATURE_DIM 96",
+        "OWW_FEATURE_WINDOW 16",
+        "SetIntraOpNumThreads(options, 1)",
+        "ORT_SEQUENTIAL",
+    ):
+        require(primitive in tater_oww_bridge, f"ONNX OWW native primitive is missing: {primitive}", errors)
+    require(
+        "ONNXRUNTIME_AARCH64_VERSION = 1.22.0" in onnxruntime_mk
+        and "ONNXRUNTIME_AARCH64_INSTALL_TARGET_CMDS" in onnxruntime_mk,
+        "the pinned ARM64 ONNX Runtime package is incomplete",
+        errors,
+    )
+    require(
+        "bb76395092d150b52c7092dc6b8f2fe4d80f0f3bf0416d2f269193e347e24702"
+        in onnxruntime_hash,
+        "the ARM64 ONNX Runtime source hash is missing",
+        errors,
+    )
+    oww_asset_hashes = {
+        "melspectrogram.onnx": "ba2b0e0f8b7b875369a2c89cb13360ff53bac436f2895cced9f479fa65eb176f",
+        "embedding_model.onnx": "70d164290c1d095d1d4ee149bc5e00543250a7316b59f31d056cff7bd3075c1f",
+        "hey_tater.oww.onnx": "2e7fc97259b6e2cdb3b7e248f28d93a952de938464abd015be737317a0ae959b",
+        "hey_tater.oww.json": "1916fe3f54b878fa309bc39bf2c880dc75b503d4c9041b9cb7817a038d35b509",
+    }
+    for asset_name, expected_hash in oww_asset_hashes.items():
+        asset = TATER_OWW_ASSETS / asset_name
+        require(asset.is_file(), f"ONNX OWW asset is missing: {asset_name}", errors)
+        if asset.is_file():
+            actual_hash = hashlib.sha256(asset.read_bytes()).hexdigest()
+            require(actual_hash == expected_hash, f"ONNX OWW asset hash changed: {asset_name}", errors)
     for primitive in (
         "AF_BLUETOOTH",
         "EVT_LE_ADVERTISING_REPORT",

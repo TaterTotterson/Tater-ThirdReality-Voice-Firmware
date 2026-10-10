@@ -30,11 +30,12 @@ Build-time source and dependency downloads are not device runtime traffic.
   verifier is off by default; enforce mode fails open if Tater cannot return a
   verdict within the configured timeout.
 - The authenticated Tater session can provide TTS/media URLs, external wake
-  word model URLs, custom wake-sound URLs, and signed firmware URLs. The device
+  word model or dual-model bundle URLs, custom wake-sound URLs, and signed firmware URLs. The device
   fetches these only as part of an authenticated command or configuration from
   that Tater server. Built-in wake sounds are embedded and make no network call;
-  a custom WAV is downloaded once and reused from a URL- and checksum-bound
-  local cache.
+  a custom WAV or ONNX wake package is downloaded once and reused from a
+  checksum-bound local cache. Every OWW metadata and classifier artifact must
+  match the SHA-256 recorded in its Tater wake-word bundle.
   Firmware downloads are accepted by SWUpdate only when their signature matches
   the Tater public key embedded at build time.
 - The Tater peripheral WebSocket is loopback-only at `127.0.0.1:6055`.

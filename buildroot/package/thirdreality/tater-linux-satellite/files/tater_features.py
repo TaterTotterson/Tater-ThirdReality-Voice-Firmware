@@ -22,6 +22,7 @@ from urllib.request import Request, urlopen
 
 from .ble_scanner import LinuxBleScanner
 from .peripheral_api import LVAEvent
+from .tater_oww_onnx import OWWWorker, runtime_assets_ready
 
 _LOGGER = logging.getLogger(__name__)
 _PROTOCOL_VERSION = 1
@@ -33,10 +34,18 @@ _SWUPDATE_KEY = Path("/etc/swupdate-public.pem")
 _OTA_MAX_BYTES = 192 * 1024 * 1024
 _WAKE_MANIFEST_MAX_BYTES = 128 * 1024
 _WAKE_MODEL_MAX_BYTES = 2 * 1024 * 1024
+_OWW_BUNDLE_MAX_BYTES = 256 * 1024
+_OWW_METADATA_MAX_BYTES = 512 * 1024
+_OWW_MODEL_MAX_BYTES = 4 * 1024 * 1024
 _WAKE_SOUND_MAX_BYTES = 2 * 1024 * 1024
 _WAKE_DOWNLOAD_TIMEOUT_SECONDS = 30
 _WAKE_URL_SCHEMES = {"http", "https"}
 _WAKE_SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
+_OWW_SHARED_DIR = Path("/usr/share/tater/openwakeword")
+_OWW_BUILTIN_BUNDLE = _OWW_SHARED_DIR / "hey_tater.wake-bundle.json"
+_OWW_BUILTIN_MODEL = _OWW_SHARED_DIR / "hey_tater.oww.onnx"
+_OWW_CACHE_DIR = Path("/data/conf/openwakeword")
+_OWW_AGREEMENT_SECONDS = 1.2
 _TATER_WAKE_SOUND_DIR = Path(__file__).resolve().parents[1] / "sounds"
 _WAKE_SOUND_FILES = {
     "blip2": "blip2.wav",
@@ -331,6 +340,144 @@ def _download_custom_wake_package(state: Any, manifest_url: str) -> tuple[str, A
     return model_id, available, loaded
 
 
+@dataclass(frozen=True)
+class _OWWPackage:
+    classifier_path: Path
+    wake_word: str
+    threshold: float
+    patience: int
+    source: str
+
+
+def _oww_number(value: Any, *, name: str) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"openWakeWord bundle has an invalid {name}") from exc
+    if number < 0.01 or number > 1.0:
+        raise ValueError(f"openWakeWord bundle has an invalid {name}")
+    return number
+
+
+def _oww_integer(value: Any, *, name: str) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"openWakeWord bundle has an invalid {name}") from exc
+    if number < 1 or number > 20:
+        raise ValueError(f"openWakeWord bundle has an invalid {name}")
+    return number
+
+
+def _oww_bundle_details(bundle: Any, *, confirmation: bool) -> tuple[str, dict[str, Any], float, int]:
+    if not isinstance(bundle, dict):
+        raise ValueError("openWakeWord bundle must be a JSON object")
+    if str(bundle.get("type") or "").strip() != "tater_wake_word_bundle":
+        raise ValueError("openWakeWord URL must point to a Tater wake-word bundle")
+    wake_word = str(bundle.get("wake_word") or "").strip()
+    if not wake_word or len(wake_word) > 80:
+        raise ValueError("openWakeWord bundle has an invalid wake_word")
+    section = bundle.get("open_wake_word")
+    if not isinstance(section, dict):
+        raise ValueError("wake-word bundle is missing open_wake_word")
+    artifacts = section.get("artifacts")
+    onnx = artifacts.get("onnx") if isinstance(artifacts, dict) else None
+    if not isinstance(onnx, dict):
+        raise ValueError("wake-word bundle has no ONNX classifier")
+    threshold_key = "recommended_confirmation_threshold" if confirmation else "recommended_threshold"
+    patience_key = "recommended_confirmation_patience" if confirmation else "recommended_patience"
+    threshold = _oww_number(section.get(threshold_key), name=threshold_key)
+    patience = _oww_integer(section.get(patience_key), name=patience_key)
+    return wake_word, section, threshold, patience
+
+
+def _verified_sha256(data: bytes, expected: Any, *, label: str) -> str:
+    digest = str(expected or "").strip().lower()
+    if not _WAKE_SHA256.fullmatch(digest):
+        raise ValueError(f"openWakeWord bundle has an invalid {label} SHA-256")
+    if hashlib.sha256(data).hexdigest() != digest:
+        raise ValueError(f"openWakeWord {label} SHA-256 does not match the bundle")
+    return digest
+
+
+def _load_builtin_oww_package(*, confirmation: bool) -> _OWWPackage:
+    if not runtime_assets_ready():
+        raise ValueError("the ONNX openWakeWord runtime is not installed")
+    try:
+        raw = _OWW_BUILTIN_BUNDLE.read_bytes()
+        bundle = json.loads(raw.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("the built-in openWakeWord bundle is unreadable") from exc
+    wake_word, section, threshold, patience = _oww_bundle_details(
+        bundle,
+        confirmation=confirmation,
+    )
+    artifacts = section["artifacts"]
+    onnx = artifacts["onnx"]
+    model_data = _OWW_BUILTIN_MODEL.read_bytes()
+    _verified_sha256(model_data, onnx.get("sha256"), label="model")
+    if len(model_data) != _integer(onnx.get("size_bytes"), maximum=_OWW_MODEL_MAX_BYTES):
+        raise ValueError("built-in openWakeWord model size does not match the bundle")
+    return _OWWPackage(
+        classifier_path=_OWW_BUILTIN_MODEL,
+        wake_word=wake_word,
+        threshold=threshold,
+        patience=patience,
+        source="embedded",
+    )
+
+
+def _download_oww_package(bundle_url: str, *, confirmation: bool) -> _OWWPackage:
+    if not runtime_assets_ready():
+        raise ValueError("the ONNX openWakeWord runtime is not installed")
+    bundle_url = _validated_web_url(bundle_url, label="openWakeWord bundle URL")
+    bundle_raw = _download_limited(bundle_url, _OWW_BUNDLE_MAX_BYTES)
+    try:
+        bundle = json.loads(bundle_raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("openWakeWord bundle is not valid UTF-8 JSON") from exc
+    wake_word, section, threshold, patience = _oww_bundle_details(
+        bundle,
+        confirmation=confirmation,
+    )
+    metadata_ref = str(section.get("metadata") or "").strip()
+    onnx = section["artifacts"]["onnx"]
+    model_ref = str(onnx.get("file") or "").strip()
+    if not metadata_ref or not model_ref:
+        raise ValueError("openWakeWord bundle has incomplete artifact references")
+    metadata_url = _validated_web_url(urljoin(bundle_url, metadata_ref), label="openWakeWord metadata URL")
+    model_url = _validated_web_url(urljoin(bundle_url, model_ref), label="openWakeWord model URL")
+    metadata = _download_limited(metadata_url, _OWW_METADATA_MAX_BYTES)
+    model = _download_limited(model_url, _OWW_MODEL_MAX_BYTES)
+    _verified_sha256(metadata, section.get("metadata_sha256"), label="metadata")
+    model_digest = _verified_sha256(model, onnx.get("sha256"), label="model")
+    expected_size = _integer(onnx.get("size_bytes"), maximum=_OWW_MODEL_MAX_BYTES)
+    if expected_size and len(model) != expected_size:
+        raise ValueError("openWakeWord model size does not match the bundle")
+
+    _OWW_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    prefix = hashlib.sha256(bundle_url.encode("utf-8")).hexdigest()[:16]
+    model_path = _OWW_CACHE_DIR / f"{prefix}.onnx"
+    metadata_path = _OWW_CACHE_DIR / f"{prefix}.json"
+    bundle_path = _OWW_CACHE_DIR / f"{prefix}.wake-bundle.json"
+    cached_bundle = dict(bundle)
+    cached_bundle["_tater_source_url"] = bundle_url
+    cached_bundle["_tater_model_sha256"] = model_digest
+    _write_bytes_atomic(model_path, model)
+    _write_bytes_atomic(metadata_path, metadata)
+    _write_bytes_atomic(
+        bundle_path,
+        (json.dumps(cached_bundle, indent=2, ensure_ascii=False) + "\n").encode("utf-8"),
+    )
+    return _OWWPackage(
+        classifier_path=model_path,
+        wake_word=wake_word,
+        threshold=threshold,
+        patience=patience,
+        source=bundle_url,
+    )
+
+
 def _wake_sound_cache_path() -> Path:
     return _SETTINGS_PATH.with_name("tater-wake-sound.wav")
 
@@ -491,6 +638,17 @@ class TaterFeatureManager:
         self.wake_model_task: Optional[asyncio.Task[None]] = None
         self.wake_model_generation = 0
         self.wake_model_downloading = False
+        self.oww_model_task: Optional[asyncio.Task[None]] = None
+        self.oww_model_generation = 0
+        self.oww_model_downloading = False
+        self._oww_lock = threading.Lock()
+        self._oww_worker: Optional[OWWWorker] = None
+        self._oww_model_name = ""
+        self._oww_model_source = ""
+        self._oww_last_error = ""
+        self._oww_mww_candidate = 0.0
+        self._oww_candidate = 0.0
+        self._oww_agreements = 0
         self.wake_sound_task: Optional[asyncio.Task[None]] = None
         self.wake_sound_generation = 0
         self.wake_sound_downloading = False
@@ -530,6 +688,10 @@ class TaterFeatureManager:
         self.capabilities: dict[str, Any] = {
             "live_settings": True,
             "custom_wake_words": True,
+            "openwakeword": True,
+            "wake_detector_selection": True,
+            "dual_wake_confirmation": True,
+            "dual_wake_agreement_ms": int(_OWW_AGREEMENT_SECONDS * 1000),
             "wake_sounds": True,
             "custom_wake_sounds": True,
             "wake_verifier": True,
@@ -581,6 +743,77 @@ class TaterFeatureManager:
             self.settings.get("wake_environment"),
             self._configured_wake_threshold,
         )
+
+    def _wake_detector_mode(self) -> str:
+        mode = str(self.settings.get("wake_detector_mode") or "").strip().lower()
+        if mode in {"mww", "oww", "dual"}:
+            return mode
+        mww_enabled = _truthy(self.settings.get("wake_mww_enabled", True))
+        oww_enabled = _truthy(self.settings.get("wake_oww_enabled", False))
+        if mww_enabled and oww_enabled:
+            return "dual"
+        if oww_enabled:
+            return "oww"
+        return "mww"
+
+    def wake_mww_enabled(self) -> bool:
+        return self._wake_detector_mode() in {"mww", "dual"}
+
+    def submit_wake_audio(self, pcm: bytes) -> None:
+        if self._wake_detector_mode() not in {"oww", "dual"}:
+            return
+        with self._oww_lock:
+            worker = self._oww_worker
+        if worker is not None:
+            worker.submit(pcm)
+
+    def resolve_wake_detection(self, mww_detected: bool) -> bool:
+        """Combine the one MWW lane and one OWW lane without blocking capture."""
+        mode = self._wake_detector_mode()
+        now = time.monotonic()
+        with self._oww_lock:
+            worker = self._oww_worker
+        oww_event = worker.pop_detection() if worker is not None else None
+        if mode == "mww":
+            return bool(mww_detected)
+        if mode == "oww":
+            return oww_event is not None
+        if mode != "dual":
+            return False
+        if mww_detected:
+            self._oww_mww_candidate = now
+        if oww_event is not None:
+            self._oww_candidate = float(oww_event[0])
+        cutoff = now - _OWW_AGREEMENT_SECONDS
+        if self._oww_mww_candidate < cutoff:
+            self._oww_mww_candidate = 0.0
+        if self._oww_candidate < cutoff:
+            self._oww_candidate = 0.0
+        if (
+            self._oww_mww_candidate > 0.0
+            and self._oww_candidate > 0.0
+            and abs(self._oww_mww_candidate - self._oww_candidate) <= _OWW_AGREEMENT_SECONDS
+        ):
+            self._oww_mww_candidate = 0.0
+            self._oww_candidate = 0.0
+            self._oww_agreements += 1
+            return True
+        return False
+
+    def _oww_status(self) -> dict[str, Any]:
+        with self._oww_lock:
+            worker = self._oww_worker
+        worker_status = worker.status() if worker is not None else {"ready": False}
+        return {
+            **worker_status,
+            "enabled": self._wake_detector_mode() in {"oww", "dual"},
+            "downloading": self.oww_model_downloading,
+            "model": self._oww_model_name,
+            "source": self._oww_model_source,
+            "agreement_window_ms": int(_OWW_AGREEMENT_SECONDS * 1000),
+            "agreements": self._oww_agreements,
+            "last_error": self._oww_last_error or str(worker_status.get("last_error") or ""),
+        }
 
     def _wake_verification_required(self) -> bool:
         return bool(self._wake_policy()["require_verification"])
@@ -957,6 +1190,18 @@ class TaterFeatureManager:
     def status(self) -> dict[str, Any]:
         self._reconcile_ringing_timers()
         wake_policy = self._wake_policy()
+        wake_mode = self._wake_detector_mode()
+        oww_status = self._oww_status()
+        wake_engine_enabled = str(self.settings.get("wake_engine") or "micro_wake_word") not in {"off", "button"}
+        mww_ready = wake_engine_enabled and bool(self.state.active_wake_words or self.state.wake_words)
+        if not wake_engine_enabled:
+            wake_ready = False
+        elif wake_mode == "mww":
+            wake_ready = mww_ready
+        elif wake_mode == "oww":
+            wake_ready = bool(oww_status.get("ready"))
+        else:
+            wake_ready = mww_ready and bool(oww_status.get("ready"))
         disk_free = 0
         try:
             disk_free = shutil.disk_usage("/data").free
@@ -977,7 +1222,13 @@ class TaterFeatureManager:
             "wake_word": next(iter(self.state.active_wake_words), ""),
             "wake_sound": str(self.settings.get("wake_sound") or "no_sound"),
             "wake_engine": {
+                "ready": wake_ready,
+                "name": "dual" if wake_mode == "dual" else ("open_wake_word" if wake_mode == "oww" else "micro_wake_word"),
+                "mode": wake_mode,
+                "active_wake_word": next(iter(self.state.active_wake_words), ""),
+                "source": self._oww_model_source if wake_mode == "oww" else "embedded_or_custom",
                 "policy": wake_policy,
+                "openwakeword": oww_status,
                 "verifier": self._wake_verifier_status(),
             },
             "audio_frontend": getattr(self.state, "tater_audio_frontend", {}),
@@ -1219,6 +1470,23 @@ class TaterFeatureManager:
             engine = str(payload.get("wake_engine") or "micro_wake_word").strip()
             if engine in {"off", "button", "micro_wake_word"}:
                 applied["wake_engine"] = engine
+        if "wake_detector_mode" in payload:
+            detector_mode = str(payload.get("wake_detector_mode") or "mww").strip().lower()
+            if detector_mode in {"mww", "oww", "dual"}:
+                applied["wake_detector_mode"] = detector_mode
+                applied["wake_mww_enabled"] = detector_mode in {"mww", "dual"}
+                applied["wake_oww_enabled"] = detector_mode in {"oww", "dual"}
+        elif "wake_mww_enabled" in payload or "wake_oww_enabled" in payload:
+            mww_enabled = _truthy(payload.get("wake_mww_enabled", self.settings.get("wake_mww_enabled", True)))
+            oww_enabled = _truthy(payload.get("wake_oww_enabled", self.settings.get("wake_oww_enabled", False)))
+            detector_mode = "dual" if mww_enabled and oww_enabled else ("oww" if oww_enabled else "mww")
+            applied.update(
+                {
+                    "wake_detector_mode": detector_mode,
+                    "wake_mww_enabled": detector_mode in {"mww", "dual"},
+                    "wake_oww_enabled": detector_mode in {"oww", "dual"},
+                }
+            )
         if "wake_word" in payload:
             wake_word = str(payload.get("wake_word") or "").strip()
             if wake_word and len(wake_word) <= 120:
@@ -1227,6 +1495,14 @@ class TaterFeatureManager:
             wake_word_url = str(payload.get("wake_word_url") or "").strip()
             if len(wake_word_url) <= 2048:
                 applied["wake_word_url"] = wake_word_url
+        if "oww_wake_word" in payload:
+            oww_wake_word = str(payload.get("oww_wake_word") or "").strip()
+            if oww_wake_word and len(oww_wake_word) <= 120:
+                applied["oww_wake_word"] = oww_wake_word
+        if "oww_wake_word_url" in payload:
+            oww_wake_word_url = str(payload.get("oww_wake_word_url") or "").strip()
+            if len(oww_wake_word_url) <= 2048:
+                applied["oww_wake_word_url"] = oww_wake_word_url
         if "wake_sound_enabled" in payload:
             applied["wake_sound_enabled"] = _truthy(payload.get("wake_sound_enabled"))
         if "wake_sound" in payload:
@@ -1315,6 +1591,15 @@ class TaterFeatureManager:
                 self._wake_audio.clear()
         if {"wake_word", "wake_word_url", "wake_engine"}.intersection(payload):
             self._apply_wake_selection()
+        oww_keys = {
+            "wake_detector_mode",
+            "wake_mww_enabled",
+            "wake_oww_enabled",
+            "oww_wake_word",
+            "oww_wake_word_url",
+        }
+        if not persist or oww_keys.intersection(payload):
+            self._apply_oww_selection()
         if not persist or {"wake_sound_enabled", "wake_sound", "wake_sound_url"}.intersection(payload):
             self._apply_wake_sound_selection()
 
@@ -1459,6 +1744,105 @@ class TaterFeatureManager:
         except Exception as exc:  # pylint: disable=broad-except
             _LOGGER.exception("Unable to activate wake word %s", wake_word)
             self._send("log", {"level": "error", "message": f"Could not activate wake word '{wake_word}': {exc}"})
+
+    def _cancel_oww_activation(self) -> None:
+        self.oww_model_generation += 1
+        if self.oww_model_task is not None and not self.oww_model_task.done():
+            self.oww_model_task.cancel()
+        self.oww_model_task = None
+        self.oww_model_downloading = False
+
+    def _disable_oww_worker(self) -> None:
+        with self._oww_lock:
+            worker = self._oww_worker
+            self._oww_worker = None
+        if worker is not None:
+            worker.close()
+        self._oww_mww_candidate = 0.0
+        self._oww_candidate = 0.0
+
+    def _apply_oww_selection(self) -> None:
+        mode = self._wake_detector_mode()
+        engine = str(self.settings.get("wake_engine") or "micro_wake_word")
+        if mode == "mww" or engine in {"off", "button"}:
+            self._cancel_oww_activation()
+            self._disable_oww_worker()
+            self._oww_model_name = ""
+            self._oww_model_source = ""
+            self._oww_last_error = ""
+            return
+        oww_wake_word = str(self.settings.get("oww_wake_word") or "hey_tater").strip().lower()
+        bundle_url = str(self.settings.get("oww_wake_word_url") or "").strip()
+        if oww_wake_word in {"custom_url", "paired_bundle"} and not bundle_url:
+            self._oww_last_error = "Custom openWakeWord selected without a bundle URL."
+            self._send("log", {"level": "error", "message": self._oww_last_error})
+            return
+        self._cancel_oww_activation()
+        generation = self.oww_model_generation
+        self.oww_model_downloading = bool(bundle_url)
+        self.oww_model_task = asyncio.create_task(
+            self._activate_oww(bundle_url, confirmation=mode == "dual", generation=generation)
+        )
+
+    async def _activate_oww(self, bundle_url: str, *, confirmation: bool, generation: int) -> None:
+        label = "custom" if bundle_url else "built-in"
+        self._send("log", {"level": "info", "message": f"Loading the {label} ONNX openWakeWord model."})
+        new_worker: Optional[OWWWorker] = None
+        try:
+            if bundle_url:
+                package = await asyncio.to_thread(
+                    _download_oww_package,
+                    bundle_url,
+                    confirmation=confirmation,
+                )
+            else:
+                package = await asyncio.to_thread(
+                    _load_builtin_oww_package,
+                    confirmation=confirmation,
+                )
+            new_worker = await asyncio.to_thread(
+                OWWWorker,
+                package.classifier_path,
+                package.threshold,
+                package.patience,
+            )
+            if generation != self.oww_model_generation:
+                await asyncio.to_thread(new_worker.close)
+                return
+            with self._oww_lock:
+                previous = self._oww_worker
+                self._oww_worker = new_worker
+            new_worker = None
+            if previous is not None:
+                await asyncio.to_thread(previous.close)
+            self._oww_model_name = package.wake_word
+            self._oww_model_source = package.source
+            self._oww_last_error = ""
+            self._oww_mww_candidate = 0.0
+            self._oww_candidate = 0.0
+            self._send(
+                "log",
+                {
+                    "level": "info",
+                    "message": (
+                        f"ONNX openWakeWord '{package.wake_word}' is ready "
+                        f"(threshold {package.threshold:.3f}, patience {package.patience})."
+                    ),
+                },
+            )
+        except asyncio.CancelledError:
+            if new_worker is not None:
+                await asyncio.to_thread(new_worker.close)
+            raise
+        except Exception as exc:  # pylint: disable=broad-except
+            if new_worker is not None:
+                await asyncio.to_thread(new_worker.close)
+            self._oww_last_error = str(exc)[:240]
+            _LOGGER.exception("Unable to activate ONNX openWakeWord")
+            self._send("log", {"level": "error", "message": f"ONNX openWakeWord failed: {exc}"})
+        finally:
+            if generation == self.oww_model_generation:
+                self.oww_model_downloading = False
 
     def _cancel_custom_wake_download(self) -> None:
         self.wake_model_generation += 1
@@ -1946,6 +2330,18 @@ class TaterFeatureManager:
                 await self.wake_model_task
             except asyncio.CancelledError:
                 pass
+        if self.oww_model_task is not None and not self.oww_model_task.done():
+            self.oww_model_task.cancel()
+            try:
+                await self.oww_model_task
+            except asyncio.CancelledError:
+                pass
+        self.oww_model_task = None
+        with self._oww_lock:
+            oww_worker = self._oww_worker
+            self._oww_worker = None
+        if oww_worker is not None:
+            await asyncio.to_thread(oww_worker.close)
         if self.wake_sound_task is not None and not self.wake_sound_task.done():
             self.wake_sound_task.cancel()
             try:

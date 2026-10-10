@@ -1,0 +1,7 @@
+config BR2_PACKAGE_ONNXRUNTIME_AARCH64
+	bool "onnxruntime-aarch64"
+	depends on BR2_aarch64
+	help
+	  Prebuilt ONNX Runtime for 64-bit ARM Linux. Tater uses the C API
+	  from a small native bridge to run openWakeWord without installing
+	  the much larger Python runtime.

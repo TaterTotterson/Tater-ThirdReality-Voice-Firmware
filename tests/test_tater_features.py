@@ -259,6 +259,10 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.manager.capabilities["ota"])
         self.assertTrue(self.manager.capabilities["live_settings"])
         self.assertTrue(self.manager.capabilities["custom_wake_words"])
+        self.assertTrue(self.manager.capabilities["openwakeword"])
+        self.assertTrue(self.manager.capabilities["wake_detector_selection"])
+        self.assertTrue(self.manager.capabilities["dual_wake_confirmation"])
+        self.assertEqual(self.manager.capabilities["dual_wake_agreement_ms"], 1200)
         self.assertTrue(self.manager.capabilities["status_led"])
         self.assertTrue(self.manager.capabilities["sendspin_player"])
         self.assertEqual(self.manager.capabilities["sendspin_version"], 1)
@@ -278,6 +282,84 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.manager.capabilities["playback_reference_aec"])
         self.assertEqual(self.manager.capabilities["audio_scene_version"], 1)
         self.assertNotIn("synchronized_media_sessions", self.manager.capabilities)
+
+    async def test_detector_mode_is_authoritative_over_stale_flags(self) -> None:
+        with mock.patch.object(self.manager, "_apply_oww_selection") as apply_oww:
+            self.manager._apply_settings(  # pylint: disable=protected-access
+                {
+                    "wake_detector_mode": "mww",
+                    "wake_mww_enabled": True,
+                    "wake_oww_enabled": True,
+                },
+                persist=True,
+            )
+        self.assertEqual(self.manager.settings["wake_detector_mode"], "mww")
+        self.assertTrue(self.manager.settings["wake_mww_enabled"])
+        self.assertFalse(self.manager.settings["wake_oww_enabled"])
+        apply_oww.assert_called_once()
+
+    async def test_dual_mode_requires_both_detector_events(self) -> None:
+        class Worker:
+            def __init__(self) -> None:
+                self.event = None
+
+            def pop_detection(self):
+                event, self.event = self.event, None
+                return event
+
+            def close(self):
+                pass
+
+            def status(self):
+                return {"ready": True}
+
+        worker = Worker()
+        self.manager.settings["wake_detector_mode"] = "dual"
+        self.manager._oww_worker = worker  # pylint: disable=protected-access
+        worker.event = (time.monotonic(), 0.91)
+        self.assertFalse(self.manager.resolve_wake_detection(False))
+        self.assertTrue(self.manager.resolve_wake_detection(True))
+        self.assertEqual(self.manager._oww_agreements, 1)  # pylint: disable=protected-access
+
+    async def test_oww_only_mode_does_not_require_mww(self) -> None:
+        worker = mock.Mock()
+        worker.pop_detection.return_value = (time.monotonic(), 0.75)
+        worker.status.return_value = {"ready": True}
+        self.manager.settings["wake_detector_mode"] = "oww"
+        self.manager._oww_worker = worker  # pylint: disable=protected-access
+        self.assertTrue(self.manager.resolve_wake_detection(False))
+        worker.close.assert_not_called()
+
+    async def test_bundle_uses_mode_specific_calibration(self) -> None:
+        bundle = {
+            "type": "tater_wake_word_bundle",
+            "wake_word": "Hey Tater",
+            "open_wake_word": {
+                "metadata": "hey_tater.oww.json",
+                "metadata_sha256": "a" * 64,
+                "artifacts": {
+                    "onnx": {
+                        "file": "hey_tater.oww.onnx",
+                        "sha256": "b" * 64,
+                        "size_bytes": 123,
+                    }
+                },
+                "recommended_threshold": 0.56,
+                "recommended_patience": 3,
+                "recommended_confirmation_threshold": 0.90,
+                "recommended_confirmation_patience": 2,
+            },
+        }
+        _phrase, _section, threshold, patience = tater_features._oww_bundle_details(  # pylint: disable=protected-access
+            bundle,
+            confirmation=False,
+        )
+        self.assertEqual((threshold, patience), (0.56, 3))
+        _phrase, _section, threshold, patience = tater_features._oww_bundle_details(  # pylint: disable=protected-access
+            bundle,
+            confirmation=True,
+        )
+        self.assertEqual((threshold, patience), (0.90, 2))
         self.assertNotIn("audio_session_version", self.manager.capabilities)
 
     async def test_timer_start_list_and_cancel_round_trip(self) -> None:
