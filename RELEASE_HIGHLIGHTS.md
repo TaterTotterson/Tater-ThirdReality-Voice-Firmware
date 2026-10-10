@@ -9,3 +9,5 @@
 - Adds accurate openWakeWord readiness, model source, inference, and error
   diagnostics while preserving timer stop-wake handling, Sendspin playback, AEC,
   passive BLE presence, and signed OTA updates.
+- Fixes Sendspin startup on the S420 so Music Assistant and other compatible
+  controllers can discover the speaker and use its FLAC or PCM playback modes.

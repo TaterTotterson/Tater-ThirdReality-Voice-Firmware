@@ -150,6 +150,10 @@ SENDSPIN_PACKAGE = ROOT / "buildroot/package/thirdreality/sendspin-client"
 SENDSPIN_MK = SENDSPIN_PACKAGE / "sendspin-client.mk"
 SENDSPIN_WRAPPER = SENDSPIN_PACKAGE / "files/tater-sendspin"
 SENDSPIN_ROUTING_PATCH = SENDSPIN_PACKAGE / "0001-add-tater-output-channel-routing.patch"
+SENDSPIN_OPUS_PATCH = SENDSPIN_PACKAGE / "0002-filter-disabled-opus-from-advertisement.patch"
+SENDSPIN_LEGACY_NOISE_PATCH = (
+    SENDSPIN_PACKAGE / "0003-accept-legacy-noise-handshake-without-psk-category.patch"
+)
 BUSYBOX_FRAGMENT = ROOT / "buildroot/board/thirdreality/trspk/busybox-tater.fragment"
 BLACKLIST = ROOT / "buildroot/board/thirdreality/trspk/blacklist.txt"
 POST_BUILD = ROOT / "buildroot/board/thirdreality/trspk/post_build.sh"
@@ -229,6 +233,8 @@ def main() -> int:
     sendspin_mk = SENDSPIN_MK.read_text(encoding="utf-8")
     sendspin_wrapper = SENDSPIN_WRAPPER.read_text(encoding="utf-8")
     sendspin_routing_patch = SENDSPIN_ROUTING_PATCH.read_text(encoding="utf-8")
+    sendspin_opus_patch = SENDSPIN_OPUS_PATCH.read_text(encoding="utf-8")
+    sendspin_legacy_noise_patch = SENDSPIN_LEGACY_NOISE_PATCH.read_text(encoding="utf-8")
     busybox_fragment = BUSYBOX_FRAGMENT.read_text(encoding="utf-8")
     blacklist = BLACKLIST.read_text(encoding="utf-8")
     post_build = POST_BUILD.read_text(encoding="utf-8")
@@ -299,6 +305,21 @@ def main() -> int:
         require(primitive in sendspin_wrapper, f"Sendspin runtime option is missing: {primitive}", errors)
     require("--no-config" not in sendspin_wrapper, "Sendspin uses an unsupported --no-config flag", errors)
     require("return {{48000}, {16}, {2}};" in sendspin_routing_patch, "Sendspin format is not bounded for S420 audio", errors)
+    require(
+        "#ifdef SENDSPIN_ENABLE_OPUS" in sendspin_opus_patch
+        and "std::array<SendspinCodecFormat, 2> CODEC_PREFERENCE" in sendspin_opus_patch
+        and "SendspinCodecFormat::FLAC, SendspinCodecFormat::PCM" in sendspin_opus_patch,
+        "Opus-disabled Sendspin build can still advertise an unavailable decoder",
+        errors,
+    )
+    require(
+        "psk_category_code.empty()" in sendspin_legacy_noise_patch
+        and "PskCategory::LONG_TERM" in sendspin_legacy_noise_patch
+        and "PskCategory::PAIRING" in sendspin_legacy_noise_patch
+        and "PskCategory::SENTINEL" in sendspin_legacy_noise_patch,
+        "Sendspin does not accept Music Assistant's legacy Noise handshake",
+        errors,
+    )
     for primitive in ("OutputChannel::Left", "OutputChannel::Right", "OutputChannel::Mono"):
         require(primitive in sendspin_routing_patch, f"Sendspin output route is missing: {primitive}", errors)
     require("start_sendspin" in supervisor, "supervisor does not manage Sendspin", errors)
