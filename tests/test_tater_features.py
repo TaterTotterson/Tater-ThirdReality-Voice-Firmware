@@ -260,6 +260,8 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.manager.capabilities["live_settings"])
         self.assertTrue(self.manager.capabilities["custom_wake_words"])
         self.assertTrue(self.manager.capabilities["openwakeword"])
+        self.assertTrue(self.manager.capabilities["nanowakeword"])
+        self.assertEqual(self.manager.capabilities["nanowakeword_architectures"], ["cnn", "gru"])
         self.assertTrue(self.manager.capabilities["wake_detector_selection"])
         self.assertTrue(self.manager.capabilities["dual_wake_confirmation"])
         self.assertEqual(self.manager.capabilities["dual_wake_agreement_ms"], 1200)
@@ -329,6 +331,114 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
         self.manager._oww_worker = worker  # pylint: disable=protected-access
         self.assertTrue(self.manager.resolve_wake_detection(False))
         worker.close.assert_not_called()
+
+    async def test_nww_modes_are_authoritative_and_use_the_selected_architecture(self) -> None:
+        with mock.patch.object(self.manager, "_apply_oww_selection") as apply_companion:
+            self.manager._apply_settings(  # pylint: disable=protected-access
+                {
+                    "wake_detector_mode": "mww_nww",
+                    "wake_mww_enabled": False,
+                    "wake_oww_enabled": True,
+                    "wake_nww_enabled": False,
+                    "nww_wake_word": "custom_url",
+                    "nww_wake_word_url": "https://trainer.example/hey_tater.wake-bundle.json",
+                    "nww_model_revision": "c" * 64,
+                    "nww_architecture": "gru",
+                },
+                persist=True,
+            )
+        self.assertEqual(self.manager.settings["wake_detector_mode"], "mww_nww")
+        self.assertTrue(self.manager.settings["wake_mww_enabled"])
+        self.assertFalse(self.manager.settings["wake_oww_enabled"])
+        self.assertTrue(self.manager.settings["wake_nww_enabled"])
+        self.assertEqual(self.manager.settings["nww_architecture"], "gru")
+        self.assertEqual(self.manager._companion_engine(), "nano_wake_word")  # pylint: disable=protected-access
+        apply_companion.assert_called_once()
+
+    async def test_nww_only_mode_does_not_require_mww(self) -> None:
+        worker = mock.Mock()
+        worker.pop_detection.return_value = (time.monotonic(), 0.995)
+        worker.status.return_value = {"ready": True}
+        self.manager.settings["wake_detector_mode"] = "nww"
+        self.manager._oww_worker = worker  # pylint: disable=protected-access
+        self.assertFalse(self.manager.wake_mww_enabled())
+        self.assertTrue(self.manager.resolve_wake_detection(False))
+
+    async def test_bundle_selects_cnn_and_gru_nanowakeword_variants(self) -> None:
+        bundle = {
+            "type": "tater_wake_word_bundle",
+            "wake_word": "Hey Tater",
+            "nano_wake_word": {
+                "default_architecture": "cnn",
+                "variants": {
+                    "cnn": {
+                        "model": "hey_tater.nww.cnn.onnx",
+                        "model_sha256": "a" * 64,
+                        "model_size_bytes": 123,
+                        "recommended_threshold": 0.99,
+                        "recommended_patience": 3,
+                    },
+                    "gru": {
+                        "model": "hey_tater.nww.gru.onnx",
+                        "model_sha256": "b" * 64,
+                        "model_size_bytes": 456,
+                        "recommended_threshold": 0.98,
+                        "recommended_patience": 4,
+                    },
+                },
+            },
+        }
+        phrase, _variant, artifact, threshold, patience = tater_features._nww_bundle_details(  # pylint: disable=protected-access
+            bundle,
+            architecture="gru",
+        )
+        self.assertEqual(phrase, "Hey Tater")
+        self.assertEqual(artifact["file"], "hey_tater.nww.gru.onnx")
+        self.assertEqual((threshold, patience), (0.98, 4))
+        with self.assertRaisesRegex(ValueError, "unsupported NanoWakeWord"):
+            tater_features._nww_bundle_details(bundle, architecture="dnn")  # pylint: disable=protected-access
+
+    async def test_built_in_nanowakeword_models_match_the_bundle(self) -> None:
+        model_dir = (
+            ROOT
+            / "buildroot/package/thirdreality/tater-linux-satellite/files/openwakeword"
+        )
+        with (
+            mock.patch.object(tater_features, "runtime_assets_ready", return_value=True),
+            mock.patch.object(
+                tater_features,
+                "_OWW_BUILTIN_BUNDLE",
+                model_dir / "hey_tater.wake-bundle.json",
+            ),
+            mock.patch.object(
+                tater_features,
+                "_NWW_BUILTIN_MODELS",
+                {
+                    "cnn": model_dir / "hey_tater.nww.cnn.onnx",
+                    "gru": model_dir / "hey_tater.nww.gru.onnx",
+                },
+            ),
+        ):
+            cnn = tater_features._load_builtin_nww_package("cnn")  # pylint: disable=protected-access
+            gru = tater_features._load_builtin_nww_package("gru")  # pylint: disable=protected-access
+        self.assertEqual((cnn.engine, cnn.architecture, cnn.threshold), ("nano_wake_word", "cnn", 0.99))
+        self.assertEqual((gru.engine, gru.architecture, gru.threshold), ("nano_wake_word", "gru", 0.99))
+
+    async def test_built_in_nww_ignores_a_stale_custom_bundle_url(self) -> None:
+        self.manager.settings.update(
+            {
+                "wake_detector_mode": "nww",
+                "nww_wake_word": "hey_tater",
+                "nww_wake_word_url": "https://trainer.example/old.wake-bundle.json",
+                "nww_architecture": "cnn",
+            }
+        )
+        with mock.patch.object(self.manager, "_activate_oww", new_callable=mock.AsyncMock) as activate:
+            self.manager._apply_oww_selection()  # pylint: disable=protected-access
+            await self.manager.oww_model_task
+        self.assertEqual(activate.await_args.args[0], "")
+        self.assertEqual(activate.await_args.kwargs["companion_engine"], "nano_wake_word")
+        self.assertEqual(activate.await_args.kwargs["architecture"], "cnn")
 
     async def test_bundle_uses_mode_specific_calibration(self) -> None:
         bundle = {

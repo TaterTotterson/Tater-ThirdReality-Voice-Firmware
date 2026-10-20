@@ -1,10 +1,10 @@
 From 8db4c52df469a95a69f0867654c58052bdbdf2ec Mon Sep 17 00:00:00 2001
 From: Codex Integration <codex@local>
 Date: Sat, 10 Oct 2026 12:00:00 -0500
-Subject: [PATCH] add ONNX dual wake arbitration
+Subject: [PATCH] add ONNX wake arbitration
 
 Keep the existing S420 beamformed microphone path and fan it out once to the
-microWakeWord detector and the asynchronous Tater ONNX worker. The feature
+microWakeWord detector and the asynchronous Tater OWW/NWW worker. The feature
 manager owns detector selection and the bounded agreement gate.
 ---
  linux_voice_assistant/__main__.py | 23 ++++++++++++++++++-----

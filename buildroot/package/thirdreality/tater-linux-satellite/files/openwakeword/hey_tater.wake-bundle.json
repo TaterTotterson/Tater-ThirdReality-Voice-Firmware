@@ -1,28 +1,124 @@
 {
-  "schema_version": 1,
+  "schema_version": 3,
   "type": "tater_wake_word_bundle",
   "wake_word": "hey tater",
   "key": "hey_tater",
-  "created_at": "2026-10-06T12:52:03.549936+00:00",
+  "created_at": "2026-10-17T20:55:20.277533+00:00",
+  "updated_at": "2026-10-20T11:18:20.064381+00:00",
   "micro_wake_word": {
-    "manifest": "hey_tater.json",
+    "type": "micro",
+    "wake_word": "hey tater",
+    "label": "Hey Tater",
+    "author": "Tater Totterson",
+    "website": "https://github.com/TaterTotterson/microWakeWord-Trainer-AppleSilicon",
     "model": "hey_tater.tflite",
-    "manifest_sha256": "828ff688dd7c3df2ae9ae9bd13ba589ce6490f29379a851bcadecd662c4647d9",
-    "model_sha256": "f7d1dd6b9bd98b5d7539965c4cabb1ee3ab195ea9456daf66f4023c3414ea11a"
+    "trained_languages": [
+      "en"
+    ],
+    "version": 2,
+    "model_format": "tflite_stream_state_internal_quant",
+    "quantization": "int8",
+    "sample_rate": 16000,
+    "micro": {
+      "probability_cutoff": 0.99,
+      "sliding_window_size": 5,
+      "feature_step_size": 10,
+      "tensor_arena_size": 30000,
+      "minimum_esphome_version": "2024.7.0"
+    },
+    "tater_native": {
+      "format_version": 1,
+      "wake_threshold": 0.99,
+      "wake_sliding_window": 5,
+      "close_miss_threshold": 0.82,
+      "frontend": {
+        "name": "tflm_microfrontend",
+        "sample_rate": 16000,
+        "feature_duration_ms": 30,
+        "feature_step_ms": 10,
+        "feature_size": 40,
+        "input_feature_frames": 2,
+        "lower_band_limit": 125.0,
+        "upper_band_limit": 7500.0
+      },
+      "recommended_for": [
+        "tater-native-satellite",
+        "voice-pe"
+      ]
+    },
+    "calibration": {
+      "target_false_accepts_per_hour": 0.25,
+      "selected_false_accepts_per_hour_limit": 0.25,
+      "recall": 0.99568,
+      "false_accepts_per_hour": 0.103409,
+      "ambient_hours": 9.670378,
+      "positive_dataset": "validation",
+      "ambient_dataset": "validation_ambient",
+      "positive_tracks": 50000,
+      "ambient_tracks": 4,
+      "generated_at": "2026-10-20T02:58:28.901292+00:00"
+    },
+    "model_sha256": "dd6f334bc66ee14331697f739fe256045642f8b58c8c78347a2ed2c18a28577b",
+    "model_size_bytes": 137984
   },
   "open_wake_word": {
-    "metadata": "hey_tater.oww.json",
-    "metadata_sha256": "1916fe3f54b878fa309bc39bf2c880dc75b503d4c9041b9cb7817a038d35b509",
+    "type": "open_wake_word",
+    "model_name": "hey_tater",
+    "phrase": "hey tater",
+    "created_at": "2026-10-20T02:58:34.870862+00:00",
+    "synced_at": "2026-10-20T03:11:55.498643+00:00",
+    "trainer_revision": "cb0cd2f13befdf50340e05cd7a69f1f3cef152ef",
     "artifacts": {
       "onnx": {
         "file": "hey_tater.oww.onnx",
-        "sha256": "2e7fc97259b6e2cdb3b7e248f28d93a952de938464abd015be737317a0ae959b",
+        "sha256": "11d4b310e8f6caf2d7e85a68fc92a10a9ded917bb90c123de78432aacb867b5a",
         "size_bytes": 205430
       }
     },
-    "recommended_threshold": 0.99,
-    "recommended_patience": 2,
-    "recommended_confirmation_threshold": 0.92,
-    "recommended_confirmation_patience": 2
+    "recommended_threshold": 0.74,
+    "recommended_patience": 3,
+    "recommended_confirmation_threshold": 0.96,
+    "recommended_confirmation_patience": 3
+  },
+  "nano_wake_word": {
+    "default_architecture": "cnn",
+    "variants": {
+      "cnn": {
+        "type": "nano_wake_word",
+        "name": "hey_tater",
+        "phrase": "hey tater",
+        "created_at": "2026-10-20T03:13:46.843807+00:00",
+        "synced_at": "2026-10-20T11:17:29.813885+00:00",
+        "model_type": "cnn",
+        "architecture": "cnn",
+        "steps": 50000,
+        "layer_size": 32,
+        "hard_negative_samples": 3000,
+        "quality_retries_used": 1,
+        "model": "hey_tater.nww.cnn.onnx",
+        "model_sha256": "0b259e7a806e2eed9ad9f1931430d6a6e9546dceb31652e4a29c71925e42e470",
+        "model_size_bytes": 1695949,
+        "recommended_threshold": 0.99,
+        "recommended_patience": 3
+      },
+      "gru": {
+        "type": "nano_wake_word",
+        "name": "hey_tater",
+        "phrase": "hey tater",
+        "created_at": "2026-10-20T03:35:36.570552+00:00",
+        "synced_at": "2026-10-20T11:18:20.055010+00:00",
+        "model_type": "gru",
+        "architecture": "gru",
+        "steps": 50000,
+        "layer_size": 128,
+        "hard_negative_samples": 3000,
+        "quality_retries_used": 1,
+        "model": "hey_tater.nww.gru.onnx",
+        "model_sha256": "1a2b3c348c2c75bb8558fa6a710d7b8e7a720d7d3aa6c21b8e5a4f6be67ec94c",
+        "model_size_bytes": 863534,
+        "recommended_threshold": 0.99,
+        "recommended_patience": 3
+      }
+    }
   }
 }

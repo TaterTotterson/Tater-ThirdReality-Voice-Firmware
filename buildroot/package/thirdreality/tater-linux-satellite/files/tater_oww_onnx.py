@@ -1,4 +1,4 @@
-"""Asynchronous ONNX openWakeWord lane for Tater Linux satellites."""
+"""Asynchronous ONNX openWakeWord/NanoWakeWord lane for Tater satellites."""
 
 from __future__ import annotations
 
@@ -113,7 +113,7 @@ class _NativeEngine:
 
 
 class OWWWorker:
-    """Run one OWW classifier on one worker thread with a latest-wins queue."""
+    """Run one OWW or NWW classifier on a core-pinned latest-wins worker."""
 
     def __init__(self, classifier_path: Path, threshold: float, patience: int) -> None:
         self.threshold = max(0.01, min(1.0, float(threshold)))

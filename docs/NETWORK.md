@@ -30,7 +30,7 @@ Build-time source and dependency downloads are not device runtime traffic.
   verifier is off by default; enforce mode fails open if Tater cannot return a
   verdict within the configured timeout.
 - The authenticated Tater session can provide TTS/media URLs, external wake
-  word model or dual-model bundle URLs, custom wake-sound URLs, and signed firmware URLs. The device
+  word model or multi-engine wake-bundle URLs, custom wake-sound URLs, and signed firmware URLs. The device
   fetches these only as part of an authenticated command or configuration from
   that Tater server. Built-in wake sounds are embedded and make no network call;
   a custom WAV or ONNX wake package is downloaded once and reused from a

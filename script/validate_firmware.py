@@ -400,6 +400,7 @@ def main() -> int:
         "wake_during_playback",
         "playback_reference_aec",
         "openwakeword",
+        "nanowakeword",
         "wake_detector_selection",
         "dual_wake_confirmation",
         "sendspin_player",
@@ -410,7 +411,7 @@ def main() -> int:
     require(
         "submit_wake_audio(audio_chunk)" in tater_onnx_wake_patch
         and "resolve_wake_detection(activated)" in tater_onnx_wake_patch,
-        "the one-stream MWW/OWW wake fan-out patch is incomplete",
+        "the one-stream MWW/OWW/NWW wake fan-out patch is incomplete",
         errors,
     )
     for primitive in (
@@ -442,18 +443,21 @@ def main() -> int:
         "the ARM64 ONNX Runtime source hash is missing",
         errors,
     )
-    oww_asset_hashes = {
+    onnx_wake_asset_hashes = {
         "melspectrogram.onnx": "ba2b0e0f8b7b875369a2c89cb13360ff53bac436f2895cced9f479fa65eb176f",
         "embedding_model.onnx": "70d164290c1d095d1d4ee149bc5e00543250a7316b59f31d056cff7bd3075c1f",
-        "hey_tater.oww.onnx": "2e7fc97259b6e2cdb3b7e248f28d93a952de938464abd015be737317a0ae959b",
-        "hey_tater.oww.json": "1916fe3f54b878fa309bc39bf2c880dc75b503d4c9041b9cb7817a038d35b509",
+        "hey_tater.oww.onnx": "11d4b310e8f6caf2d7e85a68fc92a10a9ded917bb90c123de78432aacb867b5a",
+        "hey_tater.oww.json": "01b70e9e1aa2c2adbf97e683bf7acfa8615c67a51bac7ae6186fe737ed4b6b0a",
+        "hey_tater.nww.cnn.onnx": "0b259e7a806e2eed9ad9f1931430d6a6e9546dceb31652e4a29c71925e42e470",
+        "hey_tater.nww.gru.onnx": "1a2b3c348c2c75bb8558fa6a710d7b8e7a720d7d3aa6c21b8e5a4f6be67ec94c",
+        "hey_tater.wake-bundle.json": "0c019b1a6b0a7ce7428f33440f840bcdebc07344a8cc657aedd1b9dfc85f1b85",
     }
-    for asset_name, expected_hash in oww_asset_hashes.items():
+    for asset_name, expected_hash in onnx_wake_asset_hashes.items():
         asset = TATER_OWW_ASSETS / asset_name
-        require(asset.is_file(), f"ONNX OWW asset is missing: {asset_name}", errors)
+        require(asset.is_file(), f"ONNX wake asset is missing: {asset_name}", errors)
         if asset.is_file():
             actual_hash = hashlib.sha256(asset.read_bytes()).hexdigest()
-            require(actual_hash == expected_hash, f"ONNX OWW asset hash changed: {asset_name}", errors)
+            require(actual_hash == expected_hash, f"ONNX wake asset hash changed: {asset_name}", errors)
     for primitive in (
         "AF_BLUETOOTH",
         "EVT_LE_ADVERTISING_REPORT",

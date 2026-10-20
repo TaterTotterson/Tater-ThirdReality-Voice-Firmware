@@ -1,5 +1,5 @@
 /*
- * Stateful openWakeWord ONNX scorer for Tater's ARM64 Linux satellites.
+ * Stateful openWakeWord/NanoWakeWord ONNX scorer for ARM64 Linux satellites.
  *
  * The audio/feature contract intentionally matches the Echo firmware: one
  * 16 kHz mono stream, 80 ms inference steps, and the upstream openWakeWord
