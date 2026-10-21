@@ -262,6 +262,7 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.manager.capabilities["openwakeword"])
         self.assertTrue(self.manager.capabilities["nanowakeword"])
         self.assertEqual(self.manager.capabilities["nanowakeword_architectures"], ["cnn", "gru"])
+        self.assertTrue(self.manager.capabilities["wake_model_tuning_overrides"])
         self.assertTrue(self.manager.capabilities["wake_detector_selection"])
         self.assertTrue(self.manager.capabilities["dual_wake_confirmation"])
         self.assertEqual(self.manager.capabilities["dual_wake_agreement_ms"], 1200)
@@ -553,6 +554,52 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(persisted["barge_in_enabled"])
         self.assertTrue(self.client.satellite._tater_barge_in_enabled)
         self.assertEqual(self.manager.status()["sendspin"]["output_channel_mode"], "left")
+
+    async def test_companion_tuning_overrides_are_validated_and_persisted(self) -> None:
+        with mock.patch.object(self.manager, "_apply_oww_selection") as apply_companion:
+            self.manager._apply_settings(  # pylint: disable=protected-access
+                {
+                    "oww_threshold": 0.81,
+                    "oww_patience": 2,
+                    "nww_threshold": 0.995,
+                    "nww_patience": 4,
+                },
+                persist=True,
+            )
+        apply_companion.assert_called_once()
+        persisted = json.loads(tater_features._SETTINGS_PATH.read_text(encoding="utf-8"))
+        self.assertEqual(persisted["oww_threshold"], 0.81)
+        self.assertEqual(persisted["oww_patience"], 2)
+        self.assertEqual(persisted["nww_threshold"], 0.995)
+        self.assertEqual(persisted["nww_patience"], 4)
+
+    async def test_nww_worker_uses_live_tuning_overrides_for_builtin_package(self) -> None:
+        model_path = Path(self.temporary.name) / "hey_tater.nww.cnn.onnx"
+        model_path.write_bytes(b"model")
+        package = tater_features._OWWPackage(  # pylint: disable=protected-access
+            classifier_path=model_path,
+            wake_word="Hey Tater",
+            threshold=0.99,
+            patience=3,
+            source="embedded",
+            engine="nano_wake_word",
+            architecture="cnn",
+        )
+        self.manager.settings.update({"nww_threshold": 0.93, "nww_patience": 2})
+        worker = mock.Mock()
+        with (
+            mock.patch.object(tater_features, "_load_builtin_nww_package", return_value=package),
+            mock.patch.object(tater_features, "OWWWorker", return_value=worker) as worker_type,
+        ):
+            await self.manager._activate_oww(  # pylint: disable=protected-access
+                "",
+                companion_engine="nano_wake_word",
+                architecture="cnn",
+                confirmation=False,
+                generation=self.manager.oww_model_generation,
+            )
+        worker_type.assert_called_once_with(model_path, 0.93, 2)
+        self.assertIs(self.manager._oww_worker, worker)  # pylint: disable=protected-access
 
     async def test_wake_verifier_settings_are_validated_and_reported(self) -> None:
         self.manager.handle_message(

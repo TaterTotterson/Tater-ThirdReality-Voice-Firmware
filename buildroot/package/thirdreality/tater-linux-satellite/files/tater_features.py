@@ -822,6 +822,7 @@ class TaterFeatureManager:
             "openwakeword": True,
             "nanowakeword": True,
             "nanowakeword_architectures": ["cnn", "gru"],
+            "wake_model_tuning_overrides": True,
             "wake_detector_selection": True,
             "dual_wake_confirmation": True,
             "dual_wake_agreement_ms": int(_OWW_AGREEMENT_SECONDS * 1000),
@@ -1606,6 +1607,24 @@ class TaterFeatureManager:
             if threshold is not None:
                 threshold = max(0.01, min(0.99, threshold))
                 applied["wake_threshold"] = threshold
+        for threshold_key in ("oww_threshold", "nww_threshold"):
+            if threshold_key not in payload:
+                continue
+            try:
+                threshold = float(payload.get(threshold_key))
+            except (TypeError, ValueError):
+                continue
+            if 0.01 <= threshold <= 1.0:
+                applied[threshold_key] = threshold
+        for patience_key in ("oww_patience", "nww_patience"):
+            if patience_key not in payload:
+                continue
+            try:
+                patience = int(payload.get(patience_key))
+            except (TypeError, ValueError):
+                continue
+            if 1 <= patience <= 20:
+                applied[patience_key] = patience
         if "wake_sensitivity" in payload:
             sensitivity = str(payload.get("wake_sensitivity") or "").strip().lower()
             normalized = _normalize_wake_sensitivity(sensitivity)
@@ -1790,6 +1809,10 @@ class TaterFeatureManager:
             "nww_wake_word_url",
             "nww_model_revision",
             "nww_architecture",
+            "oww_threshold",
+            "oww_patience",
+            "nww_threshold",
+            "nww_patience",
         }
         if not persist or oww_keys.intersection(payload):
             self._apply_oww_selection()
@@ -2035,11 +2058,17 @@ class TaterFeatureManager:
                         _load_builtin_oww_package,
                         confirmation=confirmation,
                     )
+            threshold_key = "nww_threshold" if companion_engine == "nano_wake_word" else "oww_threshold"
+            patience_key = "nww_patience" if companion_engine == "nano_wake_word" else "oww_patience"
+            threshold = float(self.settings.get(threshold_key, package.threshold))
+            patience = int(self.settings.get(patience_key, package.patience))
+            threshold = max(0.01, min(1.0, threshold))
+            patience = max(1, min(20, patience))
             new_worker = await asyncio.to_thread(
                 OWWWorker,
                 package.classifier_path,
-                package.threshold,
-                package.patience,
+                threshold,
+                patience,
             )
             if generation != self.oww_model_generation:
                 await asyncio.to_thread(new_worker.close)
@@ -2063,7 +2092,7 @@ class TaterFeatureManager:
                     "level": "info",
                     "message": (
                         f"ONNX {engine_label}{architecture_label} '{package.wake_word}' is ready "
-                        f"(threshold {package.threshold:.3f}, patience {package.patience})."
+                        f"(threshold {threshold:.3f}, patience {patience})."
                     ),
                 },
             )

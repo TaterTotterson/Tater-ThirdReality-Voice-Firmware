@@ -1,10 +1,9 @@
-- Releases ThirdReality S420 firmware `0.2.24` with NanoWakeWord CNN and GRU
-  support alongside the existing microWakeWord and openWakeWord engines.
-- Adds NWW-only and MWW + NWW confirmation modes, architecture selection,
-  live model switching, and capability reporting through the Tater-native
-  settings channel.
-- Installs the matched built-in Hey Tater MWW, OWW, NWW-CNN, and NWW-GRU
-  family and securely loads trainer-produced schema-v3 wake bundles with
-  calibrated thresholds, size checks, and SHA-256 verification.
-- Preserves MWW, OWW, MWW + OWW, AEC, passive BLE presence, Sendspin playback,
-  timer controls, and signed OTA updates from the previous release.
+- Releases ThirdReality S420 firmware `0.2.25` with live per-model wake tuning
+  for microWakeWord, openWakeWord, and NanoWakeWord CNN and GRU.
+- Applies threshold and patience overrides to OWW and NWW in both standalone
+  and MWW confirmation modes while retaining each wake bundle's calibrated
+  values whenever an override is disabled.
+- Advertises wake-model tuning support to Tater and keeps effective settings
+  visible in the satellite diagnostics and model-ready log entry.
+- Preserves all five wake modes, NanoWakeWord CNN/GRU selection, schema-v3
+  custom bundles, AEC, BLE presence, Sendspin, timers, and signed OTA updates.

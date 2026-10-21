@@ -18,8 +18,8 @@ class ReleaseNotesTests(unittest.TestCase):
             manifest.write_text(
                 json.dumps(
                     {
-                        "version": "0.2.24",
-                        "display_version": "0.2.24",
+                        "version": "0.2.25",
+                        "display_version": "0.2.25",
                         "devices": [
                             {
                                 "artifacts": {
@@ -45,7 +45,7 @@ class ReleaseNotesTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
             notes = output.read_text(encoding="utf-8")
-            self.assertIn("# Tater ThirdReality S420 Firmware 0.2.24", notes)
+            self.assertIn("# Tater ThirdReality S420 Firmware 0.2.25", notes)
             self.assertIn("## What's Changed", notes)
             self.assertIn("NanoWakeWord CNN and GRU", notes)
             self.assertIn("signed `ota` artifact", notes)
