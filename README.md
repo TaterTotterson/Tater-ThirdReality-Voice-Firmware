@@ -173,3 +173,7 @@ python3 -m unittest discover -s tests -v
 - Synchronized playback: [Sendspin/sendspin-cpp-cli](https://github.com/Sendspin/sendspin-cpp-cli)
 
 This fork retains the upstream Apache-2.0 license.
+
+## Trademarks
+
+The Tater name and logo are governed by the [Tater Trademark Policy](TRADEMARKS.md).
