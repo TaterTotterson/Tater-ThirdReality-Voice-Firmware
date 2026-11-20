@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Existing s420-X.Y.Z tag to rebuild with the current ONNX dependency package
+        description: Existing s420-X.Y.Z tag to rebuild with the current build fixes
         required: true
         type: string
       make_latest:
@@ -37,16 +37,20 @@ jobs:
           ref: ${{ inputs.release_tag || github.ref }}
           submodules: true
 
-      - name: Restore verified dependency for an existing release
+      - name: Restore build fixes for an existing release
         if: github.event_name == 'workflow_dispatch'
         env:
           BUILD_SUPPORT_COMMIT: ${{ github.sha }}
         run: |
           set -euo pipefail
-          # Preserve the tagged firmware source. Only apply the dependency fix
+          # Preserve the tagged firmware source. Only apply the build fixes
           # from the commit containing this manually dispatched workflow.
           git fetch --no-tags --depth=1 origin "$BUILD_SUPPORT_COMMIT"
-          git restore --source="$BUILD_SUPPORT_COMMIT" --worktree -- buildroot/package/thirdreality/onnxruntime-aarch64
+          git restore --source="$BUILD_SUPPORT_COMMIT" --worktree -- \
+            buildroot/package/thirdreality/onnxruntime-aarch64 \
+            buildroot/package/thirdreality/tater-linux-satellite/0012-support-live-satellite-name-and-room.patch \
+            script/check_tater_patches.sh
+          rm -f buildroot/package/thirdreality/tater-linux-satellite/0001-support-live-satellite-name-and-room.patch
 
       - name: Validate release inputs
         run: |
@@ -60,6 +64,9 @@ jobs:
           python3 script/validate_firmware.py
           python3 -m unittest discover -s tests -v
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Verify complete runtime patch set
+        run: bash script/check_tater_patches.sh
 
       - name: Free disk space
         run: |
@@ -98,7 +105,7 @@ jobs:
               echo
               echo "## Build Recovery"
               echo
-              echo "Rebuilt the existing ${RELEASE_TAG} source ($(git rev-parse HEAD)) with the verified, original ONNX Runtime 1.22.0 archive bundled by ${GITHUB_SHA}. The firmware version and tag are unchanged."
+              echo "Rebuilt the existing ${RELEASE_TAG} source ($(git rev-parse HEAD)) with build fixes from ${GITHUB_SHA}: the verified, original ONNX Runtime 1.22.0 archive and the corrected order of the live name/room patch. The firmware version and tag are unchanged."
             } >> "$RELEASE_DIR/RELEASE_NOTES.md"
           fi
           echo "RELEASE_DIR=$RELEASE_DIR" >> "$GITHUB_ENV"

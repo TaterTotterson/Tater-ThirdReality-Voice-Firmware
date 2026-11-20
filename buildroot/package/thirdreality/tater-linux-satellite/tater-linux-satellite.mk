@@ -5,7 +5,7 @@
 ################################################################################
 
 # Keep this immutable. Use script/update_tater_linux_source.sh to advance it.
-# 0001 backports live identity updates; remove it once a new source pin includes
+# 0012 backports live identity updates; remove it once a new source pin includes
 # the shared runtime's identity.set / identity.result implementation.
 TATER_LINUX_SATELLITE_VERSION = beb3ff6a81888e18ab603db3c3d42a3b89692c65
 TATER_LINUX_SATELLITE_SITE = $(call github,TaterTotterson,Tater-Linux-Satellite,$(TATER_LINUX_SATELLITE_VERSION))

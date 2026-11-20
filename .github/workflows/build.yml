@@ -21,6 +21,9 @@ jobs:
       - name: Validate firmware structure
         run: python3 script/validate_firmware.py
 
+      - name: Verify complete runtime patch set
+        run: bash script/check_tater_patches.sh
+
       - name: Run bridge unit tests
         run: python3 -m unittest discover -s tests -v
 
@@ -32,6 +35,7 @@ jobs:
           bash -n script/prepare_ota_keys.sh
           bash -n script/generate_development_ota_key.sh
           bash -n script/update_tater_linux_source.sh
+          bash -n script/check_tater_patches.sh
           sh -n buildroot/package/thirdreality/tater-linux-satellite/files/tater-satellite-launcher
           sh -n buildroot/package/thirdreality/tater-linux-satellite/files/tater-configure
           sh -n buildroot/package/thirdreality/sendspin-client/files/tater-sendspin
@@ -92,9 +96,9 @@ jobs:
             exit 1
           fi
           VERSION="${{ github.event.inputs.version }}"
-          ARGS="trspk"
+          ARGS=(trspk)
           if [ -n "$VERSION" ]; then
-            ARGS="trspk $VERSION"
+            ARGS+=("$VERSION")
           fi
           docker run --rm \
             --platform linux/amd64 \
@@ -102,7 +106,7 @@ jobs:
             -v "$PWD:/build" \
             -e "HOME=/build" \
             -e "TATER_SWUPDATE_PRIVATE_KEY_PEM" \
-            voice-music-assistant-builder $ARGS
+            voice-music-assistant-builder "${ARGS[@]}"
 
       - name: Upload firmware artifacts
         uses: actions/upload-artifact@v4
