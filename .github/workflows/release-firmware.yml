@@ -4,9 +4,23 @@ on:
   push:
     tags:
       - "s420-*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing s420-X.Y.Z tag to rebuild with the current ONNX dependency package
+        required: true
+        type: string
+      make_latest:
+        description: Mark this release as latest
+        default: false
+        type: boolean
 
 permissions:
   contents: write
+
+concurrency:
+  group: s420-release-${{ inputs.release_tag || github.ref_name }}
+  cancel-in-progress: false
 
 jobs:
   firmware:
@@ -14,11 +28,25 @@ jobs:
     timeout-minutes: 360
     env:
       TATER_SWUPDATE_PRIVATE_KEY_PEM: ${{ secrets.TATER_SWUPDATE_PRIVATE_KEY_PEM }}
+      RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+      MAKE_LATEST: ${{ github.event_name == 'push' || inputs.make_latest }}
     steps:
       - name: Check out source
         uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.release_tag || github.ref }}
           submodules: true
+
+      - name: Restore verified dependency for an existing release
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          BUILD_SUPPORT_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # Preserve the tagged firmware source. Only apply the dependency fix
+          # from the commit containing this manually dispatched workflow.
+          git fetch --no-tags --depth=1 origin "$BUILD_SUPPORT_COMMIT"
+          git restore --source="$BUILD_SUPPORT_COMMIT" --worktree -- buildroot/package/thirdreality/onnxruntime-aarch64
 
       - name: Free disk space
         run: |
@@ -29,16 +57,18 @@ jobs:
         run: |
           set -euo pipefail
           test -n "$TATER_SWUPDATE_PRIVATE_KEY_PEM"
-          VERSION="${GITHUB_REF_NAME#s420-}"
-          test "$GITHUB_REF_NAME" = "s420-${VERSION}"
-          grep -q "^TATER_S420_FIRMWARE_VERSION = ${VERSION}$" buildroot/package/thirdreality/tater-s420-firmware/tater-s420-firmware.mk
+          [[ "$RELEASE_TAG" =~ ^s420-[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          VERSION="${RELEASE_TAG#s420-}"
+          test "$(git rev-parse HEAD)" = "$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"
+          grep -Fxq "TATER_S420_FIRMWARE_VERSION = ${VERSION}" buildroot/package/thirdreality/tater-s420-firmware/tater-s420-firmware.mk
+          (cd buildroot/package/thirdreality/onnxruntime-aarch64 && sha256sum --check onnxruntime-aarch64.hash)
           python3 script/validate_firmware.py
           python3 -m unittest discover -s tests -v
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
 
       - name: Build image
         run: |
           set -euo pipefail
-          VERSION="${GITHUB_REF_NAME#s420-}"
           docker build --platform linux/amd64 -t tater-s420-builder .
           docker run --rm \
             --platform linux/amd64 \
@@ -51,19 +81,27 @@ jobs:
       - name: Package release assets
         run: |
           set -euo pipefail
-          VERSION="${GITHUB_REF_NAME#s420-}"
           RELEASE_DIR="${RUNNER_TEMP}/tater-s420-release"
           python3 script/build_release_manifest.py \
             --version "$VERSION" \
             --release-dir "$RELEASE_DIR" \
             --release-repo "$GITHUB_REPOSITORY" \
-            --release-tag "$GITHUB_REF_NAME"
-          RELEASE_MANIFEST="$(ls "$RELEASE_DIR"/*-manifest.json | head -n 1)"
+            --release-tag "$RELEASE_TAG"
+          manifests=("$RELEASE_DIR"/*-manifest.json)
+          test "${#manifests[@]}" -eq 1
+          RELEASE_MANIFEST="${manifests[0]}"
           python3 script/render_release_notes.py \
             "$RELEASE_MANIFEST" \
             "$RELEASE_DIR/RELEASE_NOTES.md"
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            {
+              echo
+              echo "## Build Recovery"
+              echo
+              echo "Rebuilt the existing ${RELEASE_TAG} source ($(git rev-parse HEAD)) with the verified, original ONNX Runtime 1.22.0 archive bundled by ${GITHUB_SHA}. The firmware version and tag are unchanged."
+            } >> "$RELEASE_DIR/RELEASE_NOTES.md"
+          fi
           echo "RELEASE_DIR=$RELEASE_DIR" >> "$GITHUB_ENV"
-          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
@@ -77,9 +115,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" "$RELEASE_DIR"/* --clobber
-            gh release edit "$GITHUB_REF_NAME" --latest --title "Tater S420 ${VERSION}" --notes-file "$RELEASE_DIR/RELEASE_NOTES.md"
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "$RELEASE_DIR"/* --clobber --repo "$GITHUB_REPOSITORY"
+            gh release edit "$RELEASE_TAG" --latest="$MAKE_LATEST" --title "Tater S420 ${VERSION}" --notes-file "$RELEASE_DIR/RELEASE_NOTES.md" --repo "$GITHUB_REPOSITORY"
           else
-            gh release create "$GITHUB_REF_NAME" "$RELEASE_DIR"/* --latest --verify-tag --title "Tater S420 ${VERSION}" --notes-file "$RELEASE_DIR/RELEASE_NOTES.md"
+            gh release create "$RELEASE_TAG" "$RELEASE_DIR"/* --latest="$MAKE_LATEST" --verify-tag --title "Tater S420 ${VERSION}" --notes-file "$RELEASE_DIR/RELEASE_NOTES.md" --repo "$GITHUB_REPOSITORY"
           fi

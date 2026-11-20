@@ -443,6 +443,15 @@ def main() -> int:
         "the ARM64 ONNX Runtime source hash is missing",
         errors,
     )
+    onnxruntime_archive = ONNXRUNTIME_MK.parent / "onnxruntime-linux-aarch64-1.22.0.tgz"
+    require(onnxruntime_archive.is_file(), "the bundled ARM64 ONNX Runtime archive is missing", errors)
+    if onnxruntime_archive.is_file():
+        require(
+            hashlib.sha256(onnxruntime_archive.read_bytes()).hexdigest()
+            == "bb76395092d150b52c7092dc6b8f2fe4d80f0f3bf0416d2f269193e347e24702",
+            "the bundled ARM64 ONNX Runtime archive failed SHA-256 verification",
+            errors,
+        )
     onnx_wake_asset_hashes = {
         "melspectrogram.onnx": "ba2b0e0f8b7b875369a2c89cb13360ff53bac436f2895cced9f479fa65eb176f",
         "embedding_model.onnx": "70d164290c1d095d1d4ee149bc5e00543250a7316b59f31d056cff7bd3075c1f",

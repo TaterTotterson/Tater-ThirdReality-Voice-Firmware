@@ -6,7 +6,9 @@
 
 ONNXRUNTIME_AARCH64_VERSION = 1.22.0
 ONNXRUNTIME_AARCH64_SOURCE = onnxruntime-linux-aarch64-$(ONNXRUNTIME_AARCH64_VERSION).tgz
-ONNXRUNTIME_AARCH64_SITE = https://github.com/microsoft/onnxruntime/releases/download/v$(ONNXRUNTIME_AARCH64_VERSION)
+# Keep the original, hash-verified archive available when the upstream asset is unavailable.
+ONNXRUNTIME_AARCH64_SITE = file://$(TOPDIR)/package/thirdreality/onnxruntime-aarch64
+ONNXRUNTIME_AARCH64_SITE_METHOD = file
 ONNXRUNTIME_AARCH64_LICENSE = MIT
 ONNXRUNTIME_AARCH64_LICENSE_FILES = LICENSE ThirdPartyNotices.txt
 ONNXRUNTIME_AARCH64_INSTALL_STAGING = YES
