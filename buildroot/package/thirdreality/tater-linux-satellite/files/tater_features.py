@@ -20,7 +20,7 @@ from typing import Any, Callable, Optional
 from urllib.parse import urljoin, urlparse
 from urllib.request import Request, urlopen
 
-from .ble_scanner import LinuxBleScanner
+from .bluetooth_proxy import BluetoothProxy
 from .peripheral_api import LVAEvent
 from .tater_oww_onnx import OWWWorker, runtime_assets_ready
 
@@ -851,11 +851,8 @@ class TaterFeatureManager:
             "ble_advertisements": True,
             "ble_advertisements_version": 1,
         }
-        self.ble_scanner = LinuxBleScanner(
-            lambda payload: self._send("ble.advertisements", payload),
-            device_id=0,
-            should_pause=self._ble_should_pause,
-        )
+        self.bluetooth = BluetoothProxy(self._send, should_pause=self._ble_should_pause)
+        self.capabilities.update(self.bluetooth.capabilities())
 
     def _send(self, message_type: str, payload: Optional[dict[str, Any]] = None) -> None:
         self.client._submit_frame(_frame(message_type, payload))  # pylint: disable=protected-access
@@ -1315,7 +1312,6 @@ class TaterFeatureManager:
 
     def connected(self) -> None:
         self._apply_settings(self.settings, persist=False)
-        self.ble_scanner.start()
 
     def disconnected(self) -> None:
         # Timers and Sendspin playback are independent of the Tater control
@@ -1325,7 +1321,7 @@ class TaterFeatureManager:
             self._stop_audio_scene(ok=False, notify=False)
         if self.overlay_session is not None:
             self._stop_overlay(ok=False, notify=False)
-        self.ble_scanner.stop()
+        self._call_soon(lambda: asyncio.create_task(self.bluetooth.close()))
 
     def _ble_should_pause(self) -> bool:
         """Protect voice, streamed playback, and OTA from combo-radio contention."""
@@ -1394,7 +1390,7 @@ class TaterFeatureManager:
                 "verifier": self._wake_verifier_status(),
             },
             "audio_frontend": getattr(self.state, "tater_audio_frontend", {}),
-            "ble_observer": self.ble_scanner.status(),
+            "bluetooth": self.bluetooth.status(),
             "data_free_bytes": disk_free,
         }
 
@@ -1403,6 +1399,9 @@ class TaterFeatureManager:
         message_id = str(body.get("id") or "").strip()
         raw_payload = body.get("payload")
         payload = raw_payload if isinstance(raw_payload, dict) else {}
+
+        if self.bluetooth.handle_message(body):
+            return True
 
         if message_type in _RETIRED_MEDIA_MESSAGES:
             return True
@@ -2571,7 +2570,7 @@ class TaterFeatureManager:
             raise
 
     async def close(self) -> None:
-        self.ble_scanner.stop()
+        await self.bluetooth.close()
         if self.wake_verifier_timeout_task is not None and not self.wake_verifier_timeout_task.done():
             self.wake_verifier_timeout_task.cancel()
             try:

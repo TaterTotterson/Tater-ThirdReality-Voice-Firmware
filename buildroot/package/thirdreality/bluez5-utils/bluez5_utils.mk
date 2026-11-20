@@ -213,8 +213,12 @@ DeviceID=bluetooth:02d0:4356
 endif
 
 define BLUEZ5_UTILS_INSTALL_TOOLS
-	$(INSTALL) -D -m 0755 $(@D)/tools/btgatt-server $(TARGET_DIR)/usr/bin
-	$(INSTALL) -D -m 0755 $(TOPDIR)/package/thirdreality/bluez5-utils/bluez_tool.sh $(TARGET_DIR)/etc/init.d/S44bluetooth
+	if [ -x $(@D)/tools/btgatt-server ]; then \
+		$(INSTALL) -D -m 0755 $(@D)/tools/btgatt-server $(TARGET_DIR)/usr/bin; \
+	fi
+	if [ "$(BR2_PACKAGE_TATER_S420_FIRMWARE)" != "y" ]; then \
+		$(INSTALL) -D -m 0755 $(TOPDIR)/package/thirdreality/bluez5-utils/bluez_tool.sh $(TARGET_DIR)/etc/init.d/S44bluetooth; \
+	fi
 endef
 
 BLUEZ5_UTILS_POST_INSTALL_TARGET_HOOKS += BLUEZ5_UTILS_INSTALL_TOOLS

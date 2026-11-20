@@ -1,9 +1,7 @@
-- Releases ThirdReality S420 firmware `0.2.26` with live satellite identity editing.
-- Change the satellite name and room live from Tater 3.0.4 or Home Assistant bridge
-  1.4.18, including Home Assistant's device editor through the bridge. An empty
-  room clears the assignment; no reset, reboot, or re-pairing is required.
-- Persist both fields together in the existing `/data/conf/tater.json` before
-  confirming changes. Retain pairing, Wi-Fi, stable device IDs, unrelated settings,
-  and the previous identity if saving fails.
-- Backport the identity protocol onto the pinned Linux runtime, preserving the
-  existing wake engines, audio pipeline, and signed OTA update path.
+- Releases ThirdReality S420 firmware `0.2.27` with on-demand Bluetooth discovery and an Echo-compatible GATT proxy.
+- Replace the automatic raw-HCI room presence observer with BlueZ and Bleak. Bluetooth stays off at boot and powers on only for explicit discovery or a device operation.
+- Support two active device connections, service discovery, reads, writes, notifications, and secure six-digit PIN pairing. Keep active links when discovery stops; pause discovery for voice, playback, and OTA work.
+- Preserve bond keys under `/data/conf/bluez` and authenticated bond markers under `/data/conf/bluetooth-bonds.json`. PINs are never saved by Tater. Keep existing Wi-Fi, identity, pairing, and other settings.
+- Install the signed system OTA on an existing Tater S420 device, or use the matching factory image for first installation/recovery. The system update includes the new BlueZ/Bleak dependencies; an application-only update cannot add them.
+- Update the connected controller to Tater 3.0.5 or Home Assistant bridge 1.4.19; Meshtastic Core 0.3.6 starts bounded discovery through a compatible satellite.
+- Broadcast-only Bluetooth sensors are not monitored continuously, and Bluetooth speaker audio is outside this proxy. Runtime tests and Buildroot dependency validation pass; physical pairing, reconnect, and voice coexistence testing remain pending.

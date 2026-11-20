@@ -6,6 +6,15 @@ PATCHRAM=/usr/bin/brcm_patchram_plus
 FIRMWARE=/etc/bluetooth/bcm4343a1.hcd
 UART=/dev/ttyS1
 
+bluetooth_rfkill() {
+    for path in /sys/class/rfkill/rfkill*; do
+        [ -r "$path/type" ] || continue
+        [ "$(cat "$path/type")" = bluetooth ] || continue
+        echo "$path/state"
+        return
+    done
+}
+
 is_running() {
     [ -s "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null
 }
@@ -20,11 +29,12 @@ start_bluetooth() {
         return 1
     fi
 
-    # The vendor aml-bt driver exposes the controller through rfkill0.
-    if [ -w /sys/class/rfkill/rfkill0/state ]; then
-        echo 0 > /sys/class/rfkill/rfkill0/state
+    # Select Bluetooth by type: never toggle the Wi-Fi rfkill device.
+    radio_state="$(bluetooth_rfkill)"
+    if [ -n "$radio_state" ] && [ -w "$radio_state" ]; then
+        echo 0 > "$radio_state"
         usleep 500000
-        echo 1 > /sys/class/rfkill/rfkill0/state
+        echo 1 > "$radio_state"
     fi
 
     echo "Starting Tater BLE controller"
@@ -37,14 +47,49 @@ stop_bluetooth() {
     echo "Stopping Tater BLE controller"
     start-stop-daemon -K -q -p "$PIDFILE" 2>/dev/null || true
     rm -f "$PIDFILE"
-    if [ -w /sys/class/rfkill/rfkill0/state ]; then
-        echo 0 > /sys/class/rfkill/rfkill0/state
+    radio_state="$(bluetooth_rfkill)"
+    if [ -n "$radio_state" ] && [ -w "$radio_state" ]; then
+        echo 0 > "$radio_state"
     fi
 }
 
 case "${1:-}" in
     start)
-        start_bluetooth
+        # Boot prepares persistent bonds, without enabling the radio.
+        mkdir -p /data/conf/bluez /var/lib
+        if [ ! -L /var/lib/bluetooth ]; then
+            if [ -d /var/lib/bluetooth ]; then
+                cp -a /var/lib/bluetooth/. /data/conf/bluez/ || exit 1
+                rm -rf /var/lib/bluetooth
+            fi
+            ln -s /data/conf/bluez /var/lib/bluetooth
+        fi
+        stop_bluetooth
+        ;;
+    enable)
+        start_bluetooth || exit 1
+        count=0
+        while [ ! -d /sys/class/bluetooth/hci0 ]; do
+            count=$((count + 1))
+            [ "$count" -lt 30 ] || exit 1
+            usleep 200000
+        done
+        if ! pidof bluetoothd >/dev/null; then
+            for daemon in /usr/libexec/bluetooth/bluetoothd /usr/libexec/bluetoothd /usr/sbin/bluetoothd; do
+                [ -x "$daemon" ] || continue
+                "$daemon" --nodetach >/dev/null 2>&1 &
+                break
+            done
+        fi
+        count=0
+        while ! pidof bluetoothd >/dev/null; do
+            count=$((count + 1))
+            [ "$count" -lt 20 ] || exit 1
+            usleep 200000
+        done
+        ;;
+    disable)
+        stop_bluetooth
         ;;
     stop)
         stop_bluetooth
@@ -55,7 +100,7 @@ case "${1:-}" in
         start_bluetooth
         ;;
     *)
-        echo "Usage: $0 {start|stop|restart}"
+        echo "Usage: $0 {start|enable|disable|stop|restart}"
         exit 1
         ;;
 esac

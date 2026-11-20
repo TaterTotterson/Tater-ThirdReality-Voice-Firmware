@@ -92,9 +92,9 @@ S420_AUDIO = (
     ROOT
     / "buildroot/package/thirdreality/tater-linux-satellite/files/s420_audio.py"
 )
-BLE_SCANNER = (
+BLUETOOTH_PROXY = (
     ROOT
-    / "buildroot/package/thirdreality/tater-linux-satellite/files/ble_scanner.py"
+    / "buildroot/package/thirdreality/tater-linux-satellite/files/bluetooth_proxy.py"
 )
 BLUETOOTH_INIT = (
     ROOT
@@ -212,7 +212,7 @@ def main() -> int:
     webrtc_aec_patch = WEBRTC_AEC_PATCH.read_text(encoding="utf-8")
     tater_features = TATER_FEATURES.read_text(encoding="utf-8")
     s420_audio = S420_AUDIO.read_text(encoding="utf-8")
-    ble_scanner = BLE_SCANNER.read_text(encoding="utf-8")
+    bluetooth_proxy = BLUETOOTH_PROXY.read_text(encoding="utf-8")
     bluetooth_init = BLUETOOTH_INIT.read_text(encoding="utf-8")
     s420_audio_diagnostic = S420_AUDIO_DIAGNOSTIC.read_text(encoding="utf-8")
     launcher = LAUNCHER.read_text(encoding="utf-8")
@@ -255,10 +255,10 @@ def main() -> int:
     require("BR2_PACKAGE_TATER_S420_FIRMWARE=y" in defconfig, "Tater S420 integration is disabled", errors)
     require("BR2_PACKAGE_TR_PROJ_HA_SPEAKER" not in defconfig, "legacy HA project package is selected", errors)
     require("BR2_PACKAGE_SENDSPIN_CLIENT=y" in defconfig, "Sendspin is disabled", errors)
-    require("BR2_PACKAGE_BLUEZ5_UTILS=y" not in defconfig, "BlueZ is enabled", errors)
+    require("BR2_PACKAGE_BLUEZ5_UTILS=y" in defconfig, "BlueZ GATT backend is disabled", errors)
     require(
-        "# BR2_PACKAGE_BLUEZ5_UTILS is not set" in defconfig,
-        "BlueZ is not explicitly disabled against the vendor default",
+        "BR2_PACKAGE_PYTHON_BLEAK=y" in defconfig,
+        "Bleak GATT backend is disabled",
         errors,
     )
     require(
@@ -458,22 +458,15 @@ def main() -> int:
         if asset.is_file():
             actual_hash = hashlib.sha256(asset.read_bytes()).hexdigest()
             require(actual_hash == expected_hash, f"ONNX wake asset hash changed: {asset_name}", errors)
-    for primitive in (
-        "AF_BLUETOOTH",
-        "EVT_LE_ADVERTISING_REPORT",
-        "parse_le_advertising_reports",
-        "_DEDUPE_MAX = 48",
-        "_BATCH_MAX = 24",
-        "_SCAN_INTERVAL_UNITS = 512",
-        "_SCAN_WINDOW_UNITS = 48",
-        "_bind_hci_socket",
-        "fcntl.ioctl(control_socket.fileno(), _HCIDEVUP, self.device_id)",
-    ):
-        require(primitive in ble_scanner, f"BLE observer primitive is missing: {primitive}", errors)
+    for module in ("bluetooth_proxy.py", "bluez_backend.py", "bluez_agent.py"):
+        require(module in package_mk, f"Bluetooth proxy module is not installed: {module}", errors)
+    require("ble_scanner.py" not in package_mk, "obsolete presence scanner is still installed", errors)
+    require('action in {"scan", "stop_scan"}' in bluetooth_proxy, "bounded discovery commands are missing", errors)
+    require("self.backend.connected()" in bluetooth_proxy, "active GATT connections do not retain the radio", errors)
     require("--tosleep=200000" in bluetooth_init, "BLE patchram sleep syntax is invalid", errors)
     require("--patchram" in bluetooth_init, "BLE patchram firmware syntax is invalid", errors)
-    require("should_pause=self._ble_should_pause" in tater_features, "BLE observer is not audio-aware", errors)
-    require('self._send("ble.advertisements", payload)' in tater_features, "BLE batches are not sent to Tater", errors)
+    require("should_pause=self._ble_should_pause" in tater_features, "Bluetooth discovery is not audio-aware", errors)
+    require("self.bluetooth.handle_message(body)" in tater_features, "Bluetooth proxy commands are not routed", errors)
     require(
         '"sendspin_version": 1' in tater_features
         and '"sendspin_output_channel_modes": ["stereo", "left", "right", "mono"]' in tater_features,

@@ -14,6 +14,8 @@ TATER_LINUX_SATELLITE_LICENSE_FILES = LICENSE
 TATER_LINUX_SATELLITE_SETUP_TYPE = pep517
 
 TATER_LINUX_SATELLITE_DEPENDENCIES = \
+	bluez5-utils \
+	python-bleak \
 	onnxruntime-aarch64 \
 	python-tater-protocol-compat \
 	python-getmac \
@@ -53,6 +55,7 @@ endef
 TATER_LINUX_SATELLITE_POST_BUILD_HOOKS += TATER_LINUX_SATELLITE_BUILD_OWW_BRIDGE
 
 define TATER_LINUX_SATELLITE_INSTALL_RESOURCES
+	rm -f $(TARGET_DIR)/etc/init.d/S44bluetooth
 	mkdir -p $(TATER_LINUX_SATELLITE_PYTHON_SITE)/wakewords
 	mkdir -p $(TATER_LINUX_SATELLITE_PYTHON_SITE)/sounds
 	mkdir -p $(TARGET_DIR)/usr/share/tater/openwakeword
@@ -76,8 +79,12 @@ define TATER_LINUX_SATELLITE_INSTALL_RESOURCES
 		$(TARGET_DIR)/usr/share/tater/openwakeword/
 	$(INSTALL) -D -m 0644 $(TATER_LINUX_SATELLITE_PKGDIR)/files/s420_audio.py \
 		$(TATER_LINUX_SATELLITE_PYTHON_SITE)/linux_voice_assistant/s420_audio.py
-	$(INSTALL) -D -m 0644 $(TATER_LINUX_SATELLITE_PKGDIR)/files/ble_scanner.py \
-		$(TATER_LINUX_SATELLITE_PYTHON_SITE)/linux_voice_assistant/ble_scanner.py
+	$(INSTALL) -D -m 0644 $(TATER_LINUX_SATELLITE_PKGDIR)/files/bluetooth_proxy.py \
+		$(TATER_LINUX_SATELLITE_PYTHON_SITE)/linux_voice_assistant/bluetooth_proxy.py
+	$(INSTALL) -D -m 0644 $(TATER_LINUX_SATELLITE_PKGDIR)/files/bluez_backend.py \
+		$(TATER_LINUX_SATELLITE_PYTHON_SITE)/linux_voice_assistant/bluez_backend.py
+	$(INSTALL) -D -m 0644 $(TATER_LINUX_SATELLITE_PKGDIR)/files/bluez_agent.py \
+		$(TATER_LINUX_SATELLITE_PYTHON_SITE)/linux_voice_assistant/bluez_agent.py
 	printf '%s\n' 'tater-thirdreality-$(TATER_LINUX_SATELLITE_VERSION)' > \
 		$(TATER_LINUX_SATELLITE_PYTHON_SITE)/version.txt
 	$(INSTALL) -D -m 0755 $(TATER_LINUX_SATELLITE_PKGDIR)/files/tater-satellite-launcher \

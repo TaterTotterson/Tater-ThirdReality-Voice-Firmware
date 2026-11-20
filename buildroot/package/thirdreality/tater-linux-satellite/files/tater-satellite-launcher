@@ -1,4 +1,5 @@
 #!/bin/sh
+export TATER_BLE_BONDS_PATH=/data/conf/bluetooth-bonds.json
 set -eu
 
 CONFIG=/data/conf/tater.json

@@ -52,10 +52,12 @@ Build-time source and dependency downloads are not device runtime traffic.
   Wi-Fi and Tater credentials locally, then reboots into station mode.
 
 The production image includes the official Sendspin player and Avahi mDNS
-advertising, but it does not include the BlueZ daemon's persistent pairing
-profile, telnet/inetd, or ADB. A bounded raw-HCI observer passively scans BLE
-advertisements and forwards batches only through the authenticated Tater
-connection. PulseAudio's RTP, RAOP, and Rygel network modules are also pruned.
+advertising, plus BlueZ/Bleak for the on-demand Bluetooth GATT proxy. The radio
+stays off until requested discovery or a device operation; no room presence
+observer runs in the background. Discovery and active GATT traffic use only the
+authenticated Tater or HA bridge connection. Bonds persist under `/data/conf`;
+there is no additional Bluetooth network listener. Telnet/inetd and ADB are not
+included. PulseAudio's RTP, RAOP, and Rygel network modules are also pruned.
 Music and grouped media playback use Sendspin; native voice, TTS, announcements,
 and signed OTA remain under the authenticated Tater connection.
 

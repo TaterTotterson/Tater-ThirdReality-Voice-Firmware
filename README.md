@@ -24,7 +24,7 @@ ThirdReality Amlogic BSP / Buildroot
 ├── Tater Linux Voice (pinned Git commit)
 │   ├── local Hey Tater wake word and playback-reference AEC
 │   ├── outbound authenticated Tater WebSocket
-│   ├── bounded passive BLE presence observer
+│   ├── on-demand BLE discovery and GATT proxy
 │   ├── timers, live settings, and signed OTA
 │   └── localhost hardware API
 ├── Official Sendspin Linux player
@@ -45,7 +45,7 @@ A weekly CI check reports when Tater Linux Voice `main` moves ahead.
 ## Current status
 
 The S420 is now a supported Tater-native satellite with released factory and
-OTA images. The current release is `s420-0.2.26`. The complete first-install
+OTA images. The current release is `s420-0.2.27`. The complete first-install
 path has been exercised on physical hardware: Tater can use the ThirdReality
 debug board to enter Amlogic USB-burn mode, write the verified factory image,
 boot the speaker, and verify the installed Tater runtime.
@@ -69,8 +69,8 @@ The everyday device path is also in place:
 - Tater-controlled wake models, thresholds, and wake-sound settings, including
   the complete built-in sound catalog, No Sound, and cached custom WAV URLs
 - ThirdReality LEDs, Home/Tap buttons, volume controls, and microphone mute
-- passive BLE presence reports using the onboard BCM43438 radio, with scanning
-  paused during voice, streamed playback, and OTA work
+- on-demand BLE discovery and a BlueZ GATT proxy using the onboard BCM43438,
+  with discovery paused during voice, streamed playback, and OTA work
 - official Sendspin playback for Tater, Music Assistant, and other compatible
   controllers, including synchronized multi-room and stereo-pair routing
 - Tater-native ducked voice overlays and audio-scene v1 foreground/background
@@ -88,9 +88,10 @@ The Sendspin player, scene, scheduled-overlay, recovery, and barge-in paths are
 implemented and covered by automated tests; further physical S420 regression
 testing can refine their tuning. Tater does not claim ownership of
 the proprietary Amlogic secure-boot root, and real-world stereo calibration can
-still be refined. Bluetooth pairing and profiles remain intentionally absent;
-the onboard Bluetooth controller is used only as a passive, non-connectable BLE
-observer. Sendspin and its mDNS advertisement are included for local playback.
+still be refined. The new Bluetooth GATT path supports two active connections
+and secure six-digit PIN pairing; physical pairing, reconnect, and radio
+coexistence checks remain to be completed on S420 hardware. Bluetooth speaker
+audio profiles are not included. Sendspin uses Wi-Fi for local playback.
 
 See [the parity matrix](docs/PARITY.md) for the exact supported and deferred
 features. See [the runtime network policy](docs/NETWORK.md) for every fixed or
@@ -115,7 +116,7 @@ For a disposable development build:
 ```sh
 ./script/generate_development_ota_key.sh
 TATER_SWUPDATE_PRIVATE_KEY_FILE=.secrets/swupdate-development-private.pem \
-  ./go --docker trspk 0.2.26
+  ./go --docker trspk 0.2.27
 ```
 
 Artifacts are written to `image/` as an Amlogic USB-burn image and a signed
@@ -134,8 +135,14 @@ speaker name. The setup network has no internet route and disappears after the
 speaker saves its configuration and restarts.
 
 Bluetooth provisioning and Improv are not included in the production image.
-Sendspin and its mDNS advertisement start automatically after provisioning;
-passive BLE presence scanning is also enabled automatically.
+Sendspin and its mDNS advertisement start automatically after provisioning.
+Bluetooth remains off until an explicit **Scan for devices** or a device operation
+from Tater or the HA bridge. Discovery times out automatically; active device
+connections keep Bluetooth enabled until disconnected. Bonds are retained under
+`/data/conf/bluez`, with authenticated bond markers in
+`/data/conf/bluetooth-bonds.json`; PINs are never saved by Tater. Broadcast-only
+sensors are not monitored continuously. This requires a system image update to
+install BlueZ and Bleak; an application-only update cannot add those dependencies.
 The local serial recovery console can still configure Tater directly:
 
 ```sh
