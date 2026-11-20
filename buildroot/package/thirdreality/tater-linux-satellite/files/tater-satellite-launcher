@@ -76,6 +76,7 @@ set -- /usr/bin/linux-voice-assistant \
     --tater-device-id "$DEVICE_ID" \
     --tater-board thirdreality_s420 \
     --tater-room "$ROOM" \
+    --tater-identity-file "$CONFIG" \
     --wake-model "$WAKE_WORD" \
     --preferences-file "$PREFERENCES_FILE" \
     --download-dir "$DOWNLOAD_DIR" \

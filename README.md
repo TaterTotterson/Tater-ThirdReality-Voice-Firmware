@@ -45,7 +45,7 @@ A weekly CI check reports when Tater Linux Voice `main` moves ahead.
 ## Current status
 
 The S420 is now a supported Tater-native satellite with released factory and
-OTA images. The current release is `s420-0.2.25`. The complete first-install
+OTA images. The current release is `s420-0.2.26`. The complete first-install
 path has been exercised on physical hardware: Tater can use the ThirdReality
 debug board to enter Amlogic USB-burn mode, write the verified factory image,
 boot the speaker, and verify the installed Tater runtime.
@@ -54,6 +54,9 @@ The everyday device path is also in place:
 
 - first-boot `Tater-Setup-XXXX` hotspot and captive portal
 - authenticated Tater pairing with persistent Wi-Fi, room, name, and settings
+- live name and room changes from Tater, the HA bridge, or HA's device editor
+  through the updated bridge, saved in `/data/conf/tater.json` without resetting
+  Wi-Fi, credentials, or the stable device ID
 - local wake word, microphone streaming, STT/TTS, continued chat, and timers
 - selectable microWakeWord, ONNX openWakeWord, or NanoWakeWord CNN/GRU
   detection, plus MWW+OWW and MWW+NWW confirmation modes on the same
@@ -112,7 +115,7 @@ For a disposable development build:
 ```sh
 ./script/generate_development_ota_key.sh
 TATER_SWUPDATE_PRIVATE_KEY_FILE=.secrets/swupdate-development-private.pem \
-  ./go --docker trspk 0.2.25
+  ./go --docker trspk 0.2.26
 ```
 
 Artifacts are written to `image/` as an Amlogic USB-burn image and a signed
