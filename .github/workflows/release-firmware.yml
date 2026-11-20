@@ -48,11 +48,6 @@ jobs:
           git fetch --no-tags --depth=1 origin "$BUILD_SUPPORT_COMMIT"
           git restore --source="$BUILD_SUPPORT_COMMIT" --worktree -- buildroot/package/thirdreality/onnxruntime-aarch64
 
-      - name: Free disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache
-          sudo apt-get clean
-
       - name: Validate release inputs
         run: |
           set -euo pipefail
@@ -61,10 +56,15 @@ jobs:
           VERSION="${RELEASE_TAG#s420-}"
           test "$(git rev-parse HEAD)" = "$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"
           grep -Fxq "TATER_S420_FIRMWARE_VERSION = ${VERSION}" buildroot/package/thirdreality/tater-s420-firmware/tater-s420-firmware.mk
-          (cd buildroot/package/thirdreality/onnxruntime-aarch64 && sha256sum --check onnxruntime-aarch64.hash)
+          (cd buildroot/package/thirdreality/onnxruntime-aarch64 && awk '$1 == "sha256" { print $2 "  " $3 }' onnxruntime-aarch64.hash | sha256sum --check --strict)
           python3 script/validate_firmware.py
           python3 -m unittest discover -s tests -v
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache
+          sudo apt-get clean
 
       - name: Build image
         run: |
