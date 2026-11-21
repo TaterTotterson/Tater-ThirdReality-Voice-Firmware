@@ -1,7 +1,8 @@
-- Releases ThirdReality S420 firmware `0.2.27` with on-demand Bluetooth discovery and an Echo-compatible GATT proxy.
-- Replace the automatic raw-HCI room presence observer with BlueZ and Bleak. Bluetooth stays off at boot and powers on only for explicit discovery or a device operation.
-- Support two active device connections, service discovery, reads, writes, notifications, and secure six-digit PIN pairing. Keep active links when discovery stops; pause discovery for voice, playback, and OTA work.
-- Preserve bond keys under `/data/conf/bluez` and authenticated bond markers under `/data/conf/bluetooth-bonds.json`. PINs are never saved by Tater. Keep existing Wi-Fi, identity, pairing, and other settings.
-- Install the signed system OTA on an existing Tater S420 device, or use the matching factory image for first installation/recovery. The system update includes the new BlueZ/Bleak dependencies; an application-only update cannot add them.
-- Update the connected controller to Tater 3.0.5 or Home Assistant bridge 1.4.19; Meshtastic Core 0.3.6 starts bounded discovery through a compatible satellite.
-- Broadcast-only Bluetooth sensors are not monitored continuously, and Bluetooth speaker audio is outside this proxy. Runtime tests and Buildroot dependency validation pass; physical pairing, reconnect, and voice coexistence testing remain pending.
+- Release ThirdReality S420 firmware `0.2.28` using the shared Tater Linux Satellite `1.1.13-tater5` runtime.
+- Add the Native/Echo wake-boundary model and ordered audio markers. Keep early command audio captured during wake verification, the wake sound, and conversation setup; preserve audio when a matching boundary is unavailable.
+- Build shared wake engines, native voice, timers, Bluetooth, Sendspin control, and audio features directly from the published Linux source. Remove duplicate Python modules and the superseded shared-feature backports.
+- Keep S420 playback-reference AEC, LEDs, buttons, provisioning, signed OTA, and its managed Sendspin player in the hardware adapter. Preserve Wi-Fi, pairing, name, room, wake choices, and audio settings.
+- Retain calibrated microWakeWord, ONNX openWakeWord, NanoWakeWord CNN/GRU and dual detection; on-demand Bluetooth discovery and GATT connections; audio scenes, speech ducking, and playback recovery.
+- Verify the pinned source archive and license checksums. Validate the installed runtime and restore the previous source pin if a future hardware patch or Python compilation check fails.
+- Includes the release build repairs since `0.2.27`: the bundled verified ONNX Runtime archive and the live name/room patch ordering correction, now superseded by the shared runtime.
+- Existing Tater S420 devices can install the signed system OTA while preserving settings. First installation and recovery use the matching factory image. Runtime tests and Buildroot checks pass; physical S420 testing remains pending.

@@ -7,7 +7,7 @@
 # Keep this immutable. Review hardware compatibility before advancing it.
 # Shared wake/audio/native features come directly from this published revision;
 # 0001 contains only S420 hardware and firmware packaging changes.
-TATER_LINUX_SATELLITE_VERSION = b07b567faf848576a8b1e8db6b91b946bf6ef51b
+TATER_LINUX_SATELLITE_VERSION = 6b48d96df8a325a71c8ce8e831b5eb07e712f3f9
 TATER_LINUX_SATELLITE_SITE = $(call github,TaterTotterson,Tater-Linux-Satellite,$(TATER_LINUX_SATELLITE_VERSION))
 TATER_LINUX_SATELLITE_LICENSE = Apache-2.0
 TATER_LINUX_SATELLITE_LICENSE_FILES = LICENSE.md

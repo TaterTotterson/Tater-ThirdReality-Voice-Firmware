@@ -1,4 +1,4 @@
-# Unreleased
+# 0.2.28 - 2026-11-21
 
 - Build directly from the published shared Tater Linux Satellite runtime.
   Remove the separate shared Python copies and the superseded backport patches.
