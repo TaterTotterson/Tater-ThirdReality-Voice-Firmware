@@ -47,10 +47,18 @@ jobs:
           # from the commit containing this manually dispatched workflow.
           git fetch --no-tags --depth=1 origin "$BUILD_SUPPORT_COMMIT"
           git restore --source="$BUILD_SUPPORT_COMMIT" --worktree -- \
-            buildroot/package/thirdreality/onnxruntime-aarch64 \
-            buildroot/package/thirdreality/tater-linux-satellite/0012-support-live-satellite-name-and-room.patch \
-            script/check_tater_patches.sh
-          rm -f buildroot/package/thirdreality/tater-linux-satellite/0001-support-live-satellite-name-and-room.patch
+            buildroot/package/thirdreality/onnxruntime-aarch64
+          # Older releases need their original runtime-specific build repair.
+          # New shared-runtime releases keep the source/checks from their tag.
+          if grep -Fq 'TATER_LINUX_SATELLITE_VERSION = beb3ff6a81888e18ab603db3c3d42a3b89692c65' \
+              buildroot/package/thirdreality/tater-linux-satellite/tater-linux-satellite.mk; then
+            LEGACY_BUILD_FIX=acfa24d95a6f7fe38ab8778094c1f03d86f85372
+            git fetch --no-tags --depth=1 origin "$LEGACY_BUILD_FIX"
+            git restore --source="$LEGACY_BUILD_FIX" --worktree -- \
+              buildroot/package/thirdreality/tater-linux-satellite/0012-support-live-satellite-name-and-room.patch \
+              script/check_tater_patches.sh
+            rm -f buildroot/package/thirdreality/tater-linux-satellite/0001-support-live-satellite-name-and-room.patch
+          fi
 
       - name: Validate release inputs
         run: |

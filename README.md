@@ -10,7 +10,7 @@ Tater firmware for the
 [ThirdReality Voice & Music Assistant](https://github.com/thirdreality/voice-music-assistant).
 This is an independent firmware fork that retains the vendor's Amlogic board
 support while replacing its voice application with
-[Tater Linux Voice](https://github.com/TaterTotterson/Tater-Linux-Satellite).
+[Tater Linux Satellite](https://github.com/TaterTotterson/Tater-Linux-Satellite).
 
 The hardware is not a Pine64 board. It is an Amlogic A113X/S420 Linux appliance
 with 256 MB RAM and 512 MB NAND. It belongs in the same broad embedded-Linux
@@ -21,7 +21,7 @@ tree, audio routing, LEDs, and recovery image format.
 
 ```text
 ThirdReality Amlogic BSP / Buildroot
-├── Tater Linux Voice (pinned Git commit)
+├── Tater Linux Satellite (pinned Git commit)
 │   ├── local Hey Tater wake word and playback-reference AEC
 │   ├── outbound authenticated Tater WebSocket
 │   ├── on-demand BLE discovery and GATT proxy
@@ -40,7 +40,10 @@ ThirdReality Amlogic BSP / Buildroot
 
 The application source is pinned in
 `buildroot/package/thirdreality/tater-linux-satellite/tater-linux-satellite.mk`.
-A weekly CI check reports when Tater Linux Voice `main` moves ahead.
+A weekly CI check reports when Tater Linux Satellite `main` moves ahead.
+Shared wake engines, boundary handling, Bluetooth, and audio features come
+directly from that published source. This repository keeps the S420 hardware,
+provisioning, and signed-update adapter; see [runtime ownership](docs/PARITY.md#shared-runtime-ownership).
 
 ## Current status
 

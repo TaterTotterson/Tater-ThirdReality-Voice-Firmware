@@ -24,10 +24,6 @@ PROTOCOL_COMPAT_PATCH = (
     ROOT
     / "buildroot/package/thirdreality/python-tater-protocol-compat/0001-allow-import-without-zeroconf.patch"
 )
-NO_FRAME_SENDER_PATCH = (
-    ROOT
-    / "buildroot/package/thirdreality/tater-linux-satellite/0005-remove-legacy-frame-sender.patch"
-)
 
 
 class NetworkPolicyTests(unittest.TestCase):
@@ -68,12 +64,10 @@ class NetworkPolicyTests(unittest.TestCase):
         self.assertIn("aioesphomeapi-42.7.0-py3.11.egg-info", post_build)
 
     def test_tater_runtime_does_not_import_pruned_frame_helper(self) -> None:
-        patch = NO_FRAME_SENDER_PATCH.read_text(encoding="utf-8")
+        from script.check_shared_runtime import get_test_runtime
+        runtime = (get_test_runtime() / "api_server.py").read_text()
         post_build = POST_BUILD.read_text(encoding="utf-8")
-        self.assertIn(
-            "-from aioesphomeapi._frame_helper.packets import make_plain_text_packets",
-            patch,
-        )
+        self.assertNotIn("make_plain_text_packets", runtime)
         self.assertIn('rm -rf "$PROTOCOL_COMPAT_DIR/_frame_helper"', post_build)
 
     def test_home_assistant_onboarding_prompt_is_not_shipped(self) -> None:

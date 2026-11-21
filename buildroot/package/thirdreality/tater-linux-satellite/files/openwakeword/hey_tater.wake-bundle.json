@@ -120,5 +120,35 @@
         "recommended_patience": 3
       }
     }
+  },
+  "wake_boundary": {
+    "threshold": 0.82,
+    "tensor_arena_size": 65536,
+    "training_strategy": "endpoint_hard_negative_v1",
+    "quality_summary": {
+      "recall": 0.95998,
+      "false_accepts_per_hour": 0.620446,
+      "ambient_hours": 9.670467
+    },
+    "type": "wake_word_end",
+    "model": "hey_tater.boundary.tflite",
+    "model_sha256": "75e3e5886be64ce67be15a75197a01dfce2e9136a2a26f455d82cc7ac92c2991",
+    "model_size_bytes": 137984,
+    "model_format": "tflite_stream_state_internal_quant",
+    "quantization": "int8",
+    "sample_rate": 16000,
+    "search_before_ms": 700,
+    "search_after_ms": 120,
+    "endpoint_offset_ms": 0,
+    "frontend": {
+      "name": "tflm_microfrontend",
+      "sample_rate": 16000,
+      "feature_duration_ms": 30,
+      "feature_step_ms": 10,
+      "feature_size": 40,
+      "input_feature_frames": 2,
+      "lower_band_limit": 125.0,
+      "upper_band_limit": 7500.0
+    }
   }
 }

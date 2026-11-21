@@ -1,7 +1,7 @@
 # Firmware parity
 
 The firmware pins Tater Linux Voice by full commit SHA. A scheduled workflow
-runs `script/update_tater_linux_source.sh --check` weekly so drift is visible;
+runs `script/update_tater_linux_source.sh --report` weekly so drift is visible;
 use `--update` to advance the pin and then rerun CI and hardware tests.
 
 | Capability | Status | Implementation |
@@ -10,6 +10,7 @@ use `--update` to advance the pin and then rerun CI and hardware tests.
 | Tater-style setup hotspot | Ready | `Tater-Setup-XXXX`, captive DNS, and local setup form on `192.168.4.1` |
 | Hey Tater wake word and microphone streaming | Ready | Shared Tater `hey_tater.tflite` model; `pymicro-wakeword` runtime |
 | ONNX openWakeWord, NanoWakeWord, and dual confirmation | Implemented; hardware validation pending | One core-pinned ARM64 ONNX scorer shares the existing beamformed 16 kHz stream with MWW. OWW, NWW CNN, and NWW GRU can run alone; MWW+OWW and MWW+NWW require both detector events within 1.2 seconds. Every mode uses the bundle's calibration, resets on dropped audio, and keeps inference off the capture thread. |
+| Wake-boundary model | Implemented; hardware validation pending | Shared Linux endpoint replay uses the tested Native/Echo model and 80 ms command overlap. Audio captured during verification and the wake sound is retained; the ordered `voice.audio_boundary` marker separates wake audio from command audio. Missing endpoints keep audio. |
 | Wake during local music | Implemented; hardware validation pending | Direct `hw:0,4` capture uses mic 0 for voice and channels 2/3 as a synchronized WebRTC playback reference; AEC is enabled only while mpv renders audio, mic gain remains 1×, and capture falls back automatically to the previous mono path |
 | Wake sensitivity and TV-nearby profile | Implemented; hardware validation pending | Sensitivity changes the effective microWakeWord threshold; `tv_nearby` admits a more permissive candidate and requires Tater verification with fail-open behavior |
 | STT wake verification | Implemented; hardware validation pending | Observe and enforce modes send the configured 0.5–2 second PCM wake window over the authenticated Tater connection using the shared `TWV1` contract; enforcement rejects false wakes and fails open if verification is unavailable or times out |
@@ -36,9 +37,30 @@ use `--update` to advance the pin and then rerun CI and hardware tests.
 
 The S420 now advertises Sendspin v1 playback and output-channel selection plus
 the native audio-scene v1, stalled-playback-recovery, and TTS barge-in
-capabilities. The retired Tater `media.session.*` clock/sync protocol is no
-longer advertised or executed. Unit and structural tests cover those paths;
+capabilities. The S420 adapter keeps the retired Tater `media.session.*` clock/sync protocol
+unadvertised and unexecuted. Unit and structural tests cover those paths;
 physical S420 regression testing is still required for Sendspin and can further
 refine audio-scene, overlay, recovery, and barge-in behavior. Secure-boot
 ownership and browser-based factory flashing remain Amlogic/platform limits,
 not missing Tater application features.
+
+## Shared runtime ownership
+
+[Tater Linux Satellite](https://github.com/TaterTotterson/Tater-Linux-Satellite)
+owns the wake engines and profiles, boundary buffering and markers, native
+transport, timers, Bluetooth proxy, Sendspin control, audio scenes and recovery.
+The S420 builds directly from the published commit in its source pin; there is
+no separate copy of those Python modules or shared-feature backport.
+
+The small `0001-adapt-shared-runtime-for-s420.patch` retains S420 capture/AEC,
+peripheral events and firmware packaging. `files/tater_features.py` subclasses
+the shared manager for provisioning, signed OTA, settings migration and the
+init-managed Sendspin player. Hardware LEDs, buttons and audio drivers stay in
+this repository.
+
+`files/shared-runtime.json` and the Buildroot hash file record the published
+source commit and archive checksum. CI extracts that archive, applies the
+hardware adapter and installs the firmware subclass before validation and
+unit tests. `script/update_tater_linux_source.sh --update` checks a newer pin's
+patches and Python compilation, and restores the old pin if that fails. Run
+the full test suite and hardware tests before releasing an updated pin.

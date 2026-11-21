@@ -1,4 +1,6 @@
 #!/bin/sh
+export TATER_DATA_DIR=/data/conf
+export TATER_WAKE_ASSET_DIR=/usr/share/tater/openwakeword
 export TATER_BLE_BONDS_PATH=/data/conf/bluetooth-bonds.json
 set -eu
 

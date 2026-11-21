@@ -4,13 +4,13 @@
 #
 ################################################################################
 
-# Keep this immutable. Use script/update_tater_linux_source.sh to advance it.
-# 0012 backports live identity updates; remove it once a new source pin includes
-# the shared runtime's identity.set / identity.result implementation.
-TATER_LINUX_SATELLITE_VERSION = beb3ff6a81888e18ab603db3c3d42a3b89692c65
+# Keep this immutable. Review hardware compatibility before advancing it.
+# Shared wake/audio/native features come directly from this published revision;
+# 0001 contains only S420 hardware and firmware packaging changes.
+TATER_LINUX_SATELLITE_VERSION = b07b567faf848576a8b1e8db6b91b946bf6ef51b
 TATER_LINUX_SATELLITE_SITE = $(call github,TaterTotterson,Tater-Linux-Satellite,$(TATER_LINUX_SATELLITE_VERSION))
 TATER_LINUX_SATELLITE_LICENSE = Apache-2.0
-TATER_LINUX_SATELLITE_LICENSE_FILES = LICENSE
+TATER_LINUX_SATELLITE_LICENSE_FILES = LICENSE.md
 TATER_LINUX_SATELLITE_SETUP_TYPE = pep517
 
 TATER_LINUX_SATELLITE_DEPENDENCIES = \
@@ -69,22 +69,16 @@ define TATER_LINUX_SATELLITE_INSTALL_RESOURCES
 		$(TATER_LINUX_SATELLITE_PYTHON_SITE)/wakewords/hey_tater.tflite
 	find $(TATER_LINUX_SATELLITE_PYTHON_SITE)/wakewords -type f \
 		\( -name 'hey_home_assistant.*' -o -iname '*nabu*' \) -delete
+	$(INSTALL) -D -m 0644 $(@D)/linux_voice_assistant/tater_features.py \
+		$(TATER_LINUX_SATELLITE_PYTHON_SITE)/linux_voice_assistant/shared_features.py
 	$(INSTALL) -D -m 0644 $(TATER_LINUX_SATELLITE_PKGDIR)/files/tater_features.py \
 		$(TATER_LINUX_SATELLITE_PYTHON_SITE)/linux_voice_assistant/tater_features.py
-	$(INSTALL) -D -m 0644 $(TATER_LINUX_SATELLITE_PKGDIR)/files/tater_oww_onnx.py \
-		$(TATER_LINUX_SATELLITE_PYTHON_SITE)/linux_voice_assistant/tater_oww_onnx.py
 	$(INSTALL) -D -m 0755 $(@D)/libtater_oww_ort.so \
 		$(TARGET_DIR)/usr/lib/libtater_oww_ort.so
 	cp -a $(TATER_LINUX_SATELLITE_PKGDIR)/files/openwakeword/. \
 		$(TARGET_DIR)/usr/share/tater/openwakeword/
 	$(INSTALL) -D -m 0644 $(TATER_LINUX_SATELLITE_PKGDIR)/files/s420_audio.py \
 		$(TATER_LINUX_SATELLITE_PYTHON_SITE)/linux_voice_assistant/s420_audio.py
-	$(INSTALL) -D -m 0644 $(TATER_LINUX_SATELLITE_PKGDIR)/files/bluetooth_proxy.py \
-		$(TATER_LINUX_SATELLITE_PYTHON_SITE)/linux_voice_assistant/bluetooth_proxy.py
-	$(INSTALL) -D -m 0644 $(TATER_LINUX_SATELLITE_PKGDIR)/files/bluez_backend.py \
-		$(TATER_LINUX_SATELLITE_PYTHON_SITE)/linux_voice_assistant/bluez_backend.py
-	$(INSTALL) -D -m 0644 $(TATER_LINUX_SATELLITE_PKGDIR)/files/bluez_agent.py \
-		$(TATER_LINUX_SATELLITE_PYTHON_SITE)/linux_voice_assistant/bluez_agent.py
 	printf '%s\n' 'tater-thirdreality-$(TATER_LINUX_SATELLITE_VERSION)' > \
 		$(TATER_LINUX_SATELLITE_PYTHON_SITE)/version.txt
 	$(INSTALL) -D -m 0755 $(TATER_LINUX_SATELLITE_PKGDIR)/files/tater-satellite-launcher \

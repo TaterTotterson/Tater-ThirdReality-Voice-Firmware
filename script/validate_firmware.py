@@ -16,54 +16,6 @@ RELEASE_NOTES_RENDERER = ROOT / "script/render_release_notes.py"
 DEFCONFIG = ROOT / "buildroot/configs/3reality_trspk_defconfig"
 PACKAGE_MK = ROOT / "buildroot/package/thirdreality/tater-linux-satellite/tater-linux-satellite.mk"
 PACKAGE_CONFIG = ROOT / "buildroot/package/thirdreality/tater-linux-satellite/Config.in"
-ZEROCONF_REMOVAL_PATCH = (
-    ROOT
-    / "buildroot/package/thirdreality/tater-linux-satellite/0001-remove-zeroconf-discovery.patch"
-)
-TATER_FEATURE_PATCH = (
-    ROOT
-    / "buildroot/package/thirdreality/tater-linux-satellite/0002-enable-tater-native-features.patch"
-)
-TATER_METADATA_PATCH = (
-    ROOT
-    / "buildroot/package/thirdreality/tater-linux-satellite/0003-use-tater-package-metadata.patch"
-)
-TATER_NATIVE_ONLY_PATCH = (
-    ROOT
-    / "buildroot/package/thirdreality/tater-linux-satellite/0004-remove-legacy-listener.patch"
-)
-TATER_NO_FRAME_SENDER_PATCH = (
-    ROOT
-    / "buildroot/package/thirdreality/tater-linux-satellite/0005-remove-legacy-frame-sender.patch"
-)
-TATER_SYNC_PLAYER_PATCH = (
-    ROOT
-    / "buildroot/package/thirdreality/tater-linux-satellite/0006-add-tater-synchronized-mpv-controls.patch"
-)
-TATER_BARGE_IN_PATCH = (
-    ROOT
-    / "buildroot/package/thirdreality/tater-linux-satellite/0007-enable-tater-tts-barge-in.patch"
-)
-TATER_WAKE_SOUND_PATCH = (
-    ROOT
-    / "buildroot/package/thirdreality/tater-linux-satellite/0008-follow-tater-wake-sound-settings.patch"
-)
-TATER_WAKE_VERIFIER_PATCH = (
-    ROOT
-    / "buildroot/package/thirdreality/tater-linux-satellite/0009-add-tater-stt-wake-verifier.patch"
-)
-TATER_S420_AEC_PATCH = (
-    ROOT
-    / "buildroot/package/thirdreality/tater-linux-satellite/0010-add-s420-playback-reference-aec.patch"
-)
-TATER_ONNX_WAKE_PATCH = (
-    ROOT
-    / "buildroot/package/thirdreality/tater-linux-satellite/0011-add-onnx-dual-wake.patch"
-)
-TATER_OWW_PYTHON = (
-    ROOT
-    / "buildroot/package/thirdreality/tater-linux-satellite/files/tater_oww_onnx.py"
-)
 TATER_OWW_BRIDGE = (
     ROOT
     / "buildroot/package/thirdreality/tater-linux-satellite/files/tater_oww_ort.c"
@@ -91,10 +43,6 @@ TATER_FEATURES = (
 S420_AUDIO = (
     ROOT
     / "buildroot/package/thirdreality/tater-linux-satellite/files/s420_audio.py"
-)
-BLUETOOTH_PROXY = (
-    ROOT
-    / "buildroot/package/thirdreality/tater-linux-satellite/files/bluetooth_proxy.py"
 )
 BLUETOOTH_INIT = (
     ROOT
@@ -194,25 +142,25 @@ def main() -> int:
     defconfig = DEFCONFIG.read_text(encoding="utf-8")
     package_mk = PACKAGE_MK.read_text(encoding="utf-8")
     package_config = PACKAGE_CONFIG.read_text(encoding="utf-8")
-    zeroconf_removal_patch = ZEROCONF_REMOVAL_PATCH.read_text(encoding="utf-8")
-    tater_feature_patch = TATER_FEATURE_PATCH.read_text(encoding="utf-8")
-    tater_metadata_patch = TATER_METADATA_PATCH.read_text(encoding="utf-8")
-    tater_native_only_patch = TATER_NATIVE_ONLY_PATCH.read_text(encoding="utf-8")
-    tater_no_frame_sender_patch = TATER_NO_FRAME_SENDER_PATCH.read_text(encoding="utf-8")
-    tater_sync_player_patch = TATER_SYNC_PLAYER_PATCH.read_text(encoding="utf-8")
-    tater_barge_in_patch = TATER_BARGE_IN_PATCH.read_text(encoding="utf-8")
-    tater_wake_sound_patch = TATER_WAKE_SOUND_PATCH.read_text(encoding="utf-8")
-    tater_wake_verifier_patch = TATER_WAKE_VERIFIER_PATCH.read_text(encoding="utf-8")
-    tater_s420_aec_patch = TATER_S420_AEC_PATCH.read_text(encoding="utf-8")
-    tater_onnx_wake_patch = TATER_ONNX_WAKE_PATCH.read_text(encoding="utf-8")
-    tater_oww_python = TATER_OWW_PYTHON.read_text(encoding="utf-8")
+    # Import here so --help and packaging tools don't fetch runtime sources.
+    sys.path.insert(0, str(ROOT / "script"))
+    from check_shared_runtime import get_test_runtime
+    runtime = get_test_runtime()
+    runtime_main = (runtime / "__main__.py").read_text()
+    runtime_native = (runtime / "tater_native.py").read_text()
+    runtime_satellite = (runtime / "satellite.py").read_text()
+    runtime_api = (runtime / "api_server.py").read_text()
+    runtime_player = (runtime / "player/libmpv.py").read_text()
+    runtime_metadata = (runtime.parent / "pyproject.toml").read_text()
+    tater_oww_python = (runtime / "tater_oww_onnx.py").read_text()
     tater_oww_bridge = TATER_OWW_BRIDGE.read_text(encoding="utf-8")
     onnxruntime_mk = ONNXRUNTIME_MK.read_text(encoding="utf-8")
     onnxruntime_hash = ONNXRUNTIME_HASH.read_text(encoding="utf-8")
     webrtc_aec_patch = WEBRTC_AEC_PATCH.read_text(encoding="utf-8")
-    tater_features = TATER_FEATURES.read_text(encoding="utf-8")
+    hardware_features = TATER_FEATURES.read_text(encoding="utf-8")
+    tater_features = (runtime / "shared_features.py").read_text() + "\n" + hardware_features
     s420_audio = S420_AUDIO.read_text(encoding="utf-8")
-    bluetooth_proxy = BLUETOOTH_PROXY.read_text(encoding="utf-8")
+    bluetooth_proxy = (runtime / "bluetooth_proxy.py").read_text()
     bluetooth_init = BLUETOOTH_INIT.read_text(encoding="utf-8")
     s420_audio_diagnostic = S420_AUDIO_DIAGNOSTIC.read_text(encoding="utf-8")
     launcher = LAUNCHER.read_text(encoding="utf-8")
@@ -365,26 +313,14 @@ def main() -> int:
             f"routine NAND OTA can reset persistent state through {forbidden}",
             errors,
         )
-    require('LVAEvent.CONNECTION' in zeroconf_removal_patch, "Tater connection event is not patched", errors)
-    require('-from .zeroconf import HomeAssistantZeroconf' in zeroconf_removal_patch, "Zeroconf removal patch is incomplete", errors)
-    require("--tater-url is required" in tater_feature_patch, "Linux voice runtime can still enter ESPHome server mode", errors)
-    require("-                server = await loop.create_server(" in tater_native_only_patch, "legacy TCP listener removal patch is incomplete", errors)
-    require("+                server = await loop.create_server(" not in tater_native_only_patch, "legacy TCP listener is still enabled", errors)
-    require(
-        "-from aioesphomeapi._frame_helper.packets import make_plain_text_packets"
-        in tater_no_frame_sender_patch,
-        "legacy packet-framing import is still active",
-        errors,
-    )
-    require(
-        "production image has no legacy TCP listener or packet sender."
-        in tater_no_frame_sender_patch,
-        "legacy packet sender is not disabled",
-        errors,
-    )
-    require('"tater_connected": state.connected' in tater_feature_patch, "peripheral snapshot still uses HA connection naming", errors)
-    require('version     = "1.1.13.post1"' in tater_metadata_patch, "Tater Linux package version metadata is not fixed", errors)
-    require('description = "Tater-native Linux voice satellite runtime"' in tater_metadata_patch, "legacy assistant metadata remains active", errors)
+    require('LVAEvent.CONNECTION' in runtime_main, "Tater connection event is missing", errors)
+    require('from .zeroconf import' not in runtime_main, "Legacy mDNS discovery remains enabled", errors)
+    require('Tater native server URL is required' in runtime_main, "Firmware can still enter legacy server mode", errors)
+    require('loop.create_server(' not in runtime_main, "Legacy TCP listener remains enabled", errors)
+    require('make_plain_text_packets' not in runtime_api, "Legacy packet sender remains enabled", errors)
+    require('"tater_connected": state.connected' in (runtime / "peripheral_api.py").read_text(), "Peripheral snapshot uses legacy connection naming", errors)
+    require('version     = "1.1.13.post1"' in runtime_metadata, "Firmware package metadata is not fixed", errors)
+    require('description = "Tater-native Linux voice satellite runtime"' in runtime_metadata, "Firmware metadata is missing", errors)
     for capability in (
         "live_settings",
         "timers",
@@ -407,10 +343,10 @@ def main() -> int:
         "sendspin_output_channel_selection",
         "ble_advertisements",
     ):
-        require(f'"{capability}": True' in tater_features, f"Tater feature is missing: {capability}", errors)
+        require(f'"{capability}":' in tater_features or f'{capability}=True' in tater_features, f"Tater feature is missing: {capability}", errors)
     require(
-        "submit_wake_audio(audio_chunk)" in tater_onnx_wake_patch
-        and "resolve_wake_detection(activated)" in tater_onnx_wake_patch,
+        "submit_wake_audio(audio_chunk)" in runtime_main
+        and "resolve_wake_detection(activated)" in runtime_main,
         "the one-stream MWW/OWW/NWW wake fan-out patch is incomplete",
         errors,
     )
@@ -459,7 +395,8 @@ def main() -> int:
         "hey_tater.oww.json": "01b70e9e1aa2c2adbf97e683bf7acfa8615c67a51bac7ae6186fe737ed4b6b0a",
         "hey_tater.nww.cnn.onnx": "0b259e7a806e2eed9ad9f1931430d6a6e9546dceb31652e4a29c71925e42e470",
         "hey_tater.nww.gru.onnx": "1a2b3c348c2c75bb8558fa6a710d7b8e7a720d7d3aa6c21b8e5a4f6be67ec94c",
-        "hey_tater.wake-bundle.json": "0c019b1a6b0a7ce7428f33440f840bcdebc07344a8cc657aedd1b9dfc85f1b85",
+        "hey_tater.wake-bundle.json": "16cc233878dc15b0b210981aa25d7a23ab297b8aab1bb914ac65ae53dc0696d2",
+        "hey_tater.boundary.tflite": "75e3e5886be64ce67be15a75197a01dfce2e9136a2a26f455d82cc7ac92c2991",
     }
     for asset_name, expected_hash in onnx_wake_asset_hashes.items():
         asset = TATER_OWW_ASSETS / asset_name
@@ -468,17 +405,17 @@ def main() -> int:
             actual_hash = hashlib.sha256(asset.read_bytes()).hexdigest()
             require(actual_hash == expected_hash, f"ONNX wake asset hash changed: {asset_name}", errors)
     for module in ("bluetooth_proxy.py", "bluez_backend.py", "bluez_agent.py"):
-        require(module in package_mk, f"Bluetooth proxy module is not installed: {module}", errors)
+        require((runtime / module).is_file(), f"Bluetooth proxy module is not installed: {module}", errors)
     require("ble_scanner.py" not in package_mk, "obsolete presence scanner is still installed", errors)
     require('action in {"scan", "stop_scan"}' in bluetooth_proxy, "bounded discovery commands are missing", errors)
     require("self.backend.connected()" in bluetooth_proxy, "active GATT connections do not retain the radio", errors)
     require("--tosleep=200000" in bluetooth_init, "BLE patchram sleep syntax is invalid", errors)
     require("--patchram" in bluetooth_init, "BLE patchram firmware syntax is invalid", errors)
-    require("should_pause=self._ble_should_pause" in tater_features, "Bluetooth discovery is not audio-aware", errors)
-    require("self.bluetooth.handle_message(body)" in tater_features, "Bluetooth proxy commands are not routed", errors)
+    require("should_pause=self._ble_should_pause" in runtime_native, "Bluetooth discovery is not audio-aware", errors)
+    require("self._bluetooth.handle_message(body)" in runtime_native, "Bluetooth proxy commands are not routed", errors)
     require(
-        '"sendspin_version": 1' in tater_features
-        and '"sendspin_output_channel_modes": ["stereo", "left", "right", "mono"]' in tater_features,
+        'sendspin_version=1' in hardware_features
+        and 'sendspin_output_channel_modes=["stereo", "left", "right", "mono"]' in hardware_features,
         "Sendspin v1 capabilities are incomplete",
         errors,
     )
@@ -504,41 +441,41 @@ def main() -> int:
         "reset_synchronized",
     ):
         require(
-            primitive in tater_sync_player_patch,
+            primitive in runtime_player,
             f"synchronized mpv primitive is missing: {primitive}",
             errors,
         )
     require(
-        'self._mpv_property("audio_pts")' in tater_sync_player_patch,
+        'self._mpv_property("audio_pts")' in runtime_player,
         "synchronized mpv telemetry does not use the rendered-audio clock",
         errors,
     )
     require(
-        "self._mpv.audio_pitch_correction = False" in tater_sync_player_patch,
+        "self._mpv.audio_pitch_correction = False" in runtime_player,
         "synchronized mpv rate correction can still insert the audible pitch filter",
         errors,
     )
     require(
-        'getattr(self, "_tater_barge_in_enabled", False)' in tater_barge_in_patch
-        and "self.tts_response_active" in tater_barge_in_patch
-        and "self.stop()" in tater_barge_in_patch,
+        'getattr(self, "_tater_barge_in_enabled", False)' in runtime_satellite
+        and "self.tts_response_active" in runtime_satellite
+        and "self.stop()" in runtime_satellite,
         "Tater barge-in patch does not safely interrupt active TTS",
         errors,
     )
     require(
-        'getattr(self, "_tater_wakeup_sound", self.state.wakeup_sound)'
-        in tater_wake_sound_patch
-        and "self._on_wakeup_sound_finished(wake_word_phrase)" in tater_wake_sound_patch,
+        'wakeup_sound = self.state.wakeup_sound' in runtime_satellite
+        and 'self.state.wakeup_sound = self.satellite._tater_wakeup_sound' in tater_features
+        and "self._on_wakeup_sound_finished(wake_word_phrase)" in runtime_satellite,
         "Tater wake-sound patch does not honor the selected sound or silence setting",
         errors,
     )
     for primitive in (
-        "capture_wake_verifier_audio",
-        "begin_wake_verification",
-        "_tater_start_verified_wake",
+        "_wake_audio_snapshot",
+        "_queue_wake_verification",
+        "_start_local_wake",
     ):
         require(
-            primitive in tater_wake_verifier_patch,
+            primitive in runtime_native,
             f"Tater wake-verifier runtime hook is missing: {primitive}",
             errors,
         )
@@ -549,10 +486,10 @@ def main() -> int:
         "wake_verifier_mode",
         "wake_verifier_window_ms",
         "wake_verifier_timeout_ms",
-        '"verifier": self._wake_verifier_status()',
+        "_wake_verifier_status",
     ):
         require(
-            primitive in tater_features,
+            primitive in runtime_native,
             f"Tater STT wake-verifier primitive is missing: {primitive}",
             errors,
         )
@@ -563,7 +500,7 @@ def main() -> int:
         "echo_cancellation=use_aec",
     ):
         require(
-            primitive in tater_s420_aec_patch,
+            primitive in runtime_main,
             f"S420 playback-reference AEC hook is missing: {primitive}",
             errors,
         )

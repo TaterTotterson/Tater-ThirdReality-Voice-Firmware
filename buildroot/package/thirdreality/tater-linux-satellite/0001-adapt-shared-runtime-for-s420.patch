@@ -1,0 +1,543 @@
+From: TaterTotterson <tater@tatertotterson.com>
+Subject: [PATCH] Keep S420 hardware and firmware packaging on the shared runtime
+
+Shared wake, boundary, playback and native protocol features are upstream.
+This patch contains only S420 capture/AEC, peripheral events and packaging.
+
+diff --git a/linux_voice_assistant/__main__.py b/linux_voice_assistant/__main__.py
+index 2bbb472a2..7a43eeaaf 100644
+--- a/linux_voice_assistant/__main__.py
++++ b/linux_voice_assistant/__main__.py
+@@ -1,7 +1,6 @@
+ #!/usr/bin/env python3
+ import argparse
+ import asyncio
+-import errno
+ import json
+ import logging
+ import sys
+@@ -32,7 +31,6 @@ from .util import (
+ )
+ from .wake_word import find_available_wake_words, load_stop_model, load_wake_models
+ from .webrtc import WebRTCProcessor
+-from .zeroconf import HomeAssistantZeroconf
+ 
+ _LOGGER = logging.getLogger(__name__)
+ _MODULE_DIR = Path(__file__).parent
+@@ -64,6 +62,13 @@ async def main() -> None:
+         type=int,
+         default=1024,
+     )
++    parser.add_argument(
++        "--s420-four-channel-device",
++        help=(
++            "Direct four-channel ALSA capture device for S420 playback AEC; "
++            "falls back to --audio-input-device when unavailable"
++        ),
++    )
+     parser.add_argument(
+         "--audio-output-device",
+         help="Name for the audio output device (see --list-output-devices)",
+@@ -174,16 +179,9 @@ async def main() -> None:
+         "--network-interface",
+         help="Network interface the application listens on (default: auto-detected by gateway)",
+     )
+-    # Note that default port is also set in docker-entrypoint.sh
+-    parser.add_argument(
+-        "--port",
+-        type=int,
+-        default=6053,
+-        help="Port the application is listening on (default: 6053)",
+-    )
+     parser.add_argument(
+         "--tater-url",
+-        help="Tater server or native satellite WebSocket URL. Enables outbound Tater-native mode instead of the ESPHome server.",
++        help="Tater server or native satellite WebSocket URL",
+     )
+     parser.add_argument(
+         "--tater-token",
+@@ -352,7 +350,9 @@ async def main() -> None:
+     args.download_dir = Path(args.download_dir)
+     args.download_dir.mkdir(parents=True, exist_ok=True)
+ 
+-    # Resolve microphone
++    # Resolve the ordinary microphone first. The S420 direct-capture adapter
++    # keeps this object as a safe fallback if the four-channel device is not
++    # present or stops unexpectedly.
+     if args.audio_input_device is not None:
+         try:
+             args.audio_input_device = int(args.audio_input_device)
+@@ -363,6 +363,14 @@ async def main() -> None:
+     else:
+         mic = sc.default_microphone()
+ 
++    if args.s420_four_channel_device:
++        from .s420_audio import S420FourChannelMicrophone
++
++        mic = S420FourChannelMicrophone(
++            args.s420_four_channel_device,
++            fallback_microphone=mic,
++        )
++
+     # Load available wake words
+     wake_word_dirs = [Path(ww_dir) for ww_dir in args.wake_word_dir]
+ 
+@@ -517,84 +525,33 @@ async def main() -> None:
+         state.peripheral_api = peripheral_api
+ 
+     # ------------------------------------------------------------------
+-    # Satellite transport: outbound Tater native client or ESPHome TCP server.
++    # Satellite transport: outbound Tater native client.
+     # ------------------------------------------------------------------
+     loop = asyncio.get_running_loop()
+     server = None
+     native_client: Optional[TaterNativeClient] = None
+ 
+-    if args.tater_url:
+-        try:
+-            native_satellite = VoiceSatelliteProtocol(state)
+-            native_client = TaterNativeClient(
+-                native_satellite,
+-                url=args.tater_url,
+-                token=args.tater_token,
+-                token_file=args.tater_token_file or None,
+-                device_id=args.tater_device_id or state.name,
+-                device_name=state.friendly_name,
+-                board=args.tater_board,
+-                room=args.tater_room,
+-                identity_file=args.tater_identity_file or preferences_path.with_name("tater-identity.json"),
+-                firmware_version=state.version,
+-                reconnect_seconds=args.tater_reconnect_seconds,
+-            )
+-            state.native_settings_reporter = native_client.report_settings
+-        except Exception:
+-            _LOGGER.critical("Fatal error initializing Tater native satellite transport", exc_info=True)
+-            sys.exit(1)
+-    else:
+-        max_attempts = 15
+-        attempt = 1
+-
+-        # Validate VoiceSatelliteProtocol initialization BEFORE starting server
+-        # This catches errors like missing imports or broken initialization immediately
+-        # instead of failing silently only when first client connects
+-        _LOGGER.debug("Validating VoiceSatelliteProtocol initialization...")
+-        try:
+-            # Create test instance to run complete __init__ code path
+-            test_protocol = VoiceSatelliteProtocol(state)
+-            # Cleanup state reference
+-            test_protocol.state.satellite = None
+-            del test_protocol
+-            _LOGGER.debug("✅ VoiceSatelliteProtocol validation successful")
+-        except Exception:
+-            _LOGGER.critical("❌ FATAL ERROR in VoiceSatelliteProtocol initialization!", exc_info=True)
+-            _LOGGER.critical("Program will exit immediately - fix the error above first!")
+-            sys.exit(1)
+-
+-        while attempt <= max_attempts:
+-            try:
+-                server = await loop.create_server(
+-                    lambda: VoiceSatelliteProtocol(state),
+-                    host=host_ip_address,
+-                    port=args.port,
+-                )
+-                break  # connection successful, exit the loop
+-            except OSError as err:
+-                message = err.strerror or str(err)
+-                if err.errno == errno.EADDRINUSE:
+-                    message = "address already in use"
+-                if attempt < max_attempts:
+-                    _LOGGER.warning(
+-                        "Attempt %d/%d failed to bind on address (%s, %s): %s. Retrying in 1 second...",
+-                        attempt,
+-                        max_attempts,
+-                        host_ip_address,
+-                        args.port,
+-                        message,
+-                    )
+-                    await asyncio.sleep(1)
+-                    attempt += 1
+-                else:
+-                    _LOGGER.exception(
+-                        "All %d attempts failed to bind on address (%s, %s): %s",
+-                        max_attempts,
+-                        host_ip_address,
+-                        args.port,
+-                        message,
+-                    )
+-                    sys.exit(1)
++    if not args.tater_url:
++        raise ValueError("Tater native server URL is required")
++    try:
++        native_satellite = VoiceSatelliteProtocol(state)
++        native_client = TaterNativeClient(
++            native_satellite,
++            url=args.tater_url,
++            token=args.tater_token,
++            token_file=args.tater_token_file or None,
++            device_id=args.tater_device_id or state.name,
++            device_name=state.friendly_name,
++            board=args.tater_board,
++            room=args.tater_room,
++            identity_file=args.tater_identity_file or preferences_path.with_name("tater-identity.json"),
++            firmware_version=state.version,
++            reconnect_seconds=args.tater_reconnect_seconds,
++        )
++        state.native_settings_reporter = native_client.report_settings
++    except Exception:
++        _LOGGER.critical("Fatal error initializing Tater native satellite transport", exc_info=True)
++        sys.exit(1)
+ 
+     # ------------------------------------------------------------------
+     # Audio processing thread
+@@ -607,30 +564,14 @@ async def main() -> None:
+     )
+     process_audio_thread.start()
+ 
+-    # Auto discovery (zeroconf, mDNS) is only used by ESPHome server mode.
+-    if native_client is None:
+-        discovery = HomeAssistantZeroconf(
+-            port=args.port,
+-            name=state.name,
+-            mac_address=state.mac_address,
+-            host_ip_address=host_ip_address,
+-        )
+-        await discovery.register_server()
+-
+     # ------------------------------------------------------------------
+     # Start peripheral API and signal "getting started" to peripherals
+     # ------------------------------------------------------------------
+     if peripheral_api is not None:
+         await peripheral_api.start()
+-        await peripheral_api.emit_event(LVAEvent.ZEROCONF, {"status": "getting_started"})
+-
+-        # Give peripherals a window to connect and register their Light
+-        # entities before HA enumerates over the ESPHome native API. The
+-        # ESPHome server is bound but not yet serving (serve_forever runs
+-        # below), so any HA connection sits queued in the kernel for the
+-        # duration of this wait. Peripherals that register later still
+-        # work, but the new entities only show up in HA after the
+-        # integration reconnects.
++        await peripheral_api.emit_event(LVAEvent.CONNECTION, {"status": "getting_started"})
++
++        # Give local hardware peripherals a window to connect and register.
+         if args.peripheral_startup_wait > 0:
+             _LOGGER.info(
+                 "Waiting %.1fs for peripherals to register entities…",
+@@ -639,18 +580,12 @@ async def main() -> None:
+             await asyncio.sleep(args.peripheral_startup_wait)
+ 
+     try:
+-        if native_client is not None:
+-            _LOGGER.info("Tater native satellite mode started (url=%s, device_id=%s)", native_client.url, native_client.device_id)
+-            await native_client.run_forever()
+-        else:
+-            async with server:  # type: ignore[union-attr]
+-                _LOGGER.info("Server started (host=%s, port=%s)", host_ip_address, args.port)
+-                await server.serve_forever()  # type: ignore[union-attr]
++        _LOGGER.info("Tater native satellite mode started (url=%s, device_id=%s)", native_client.url, native_client.device_id)
++        await native_client.run_forever()
+     except KeyboardInterrupt:
+         pass
+     finally:
+-        if native_client is not None:
+-            await native_client.close()
++        await native_client.close()
+         process_audio_stop_event.set()
+         state.audio_queue.put_nowait(None)
+         process_audio_thread.join(timeout=3.0)
+@@ -688,6 +623,7 @@ def process_audio(
+ 
+     last_active: Optional[float] = None
+     webrtc: Optional[WebRTCProcessor] = None
++    next_audio_status = 0.0
+ 
+     try:
+         _LOGGER.debug("Opening audio input device: %s", mic.name)
+@@ -695,6 +631,7 @@ def process_audio(
+             while not stop_event.is_set():
+                 # Shape: (block_size, n_channels) for stereo, (block_size, 1) for mono.
+                 raw = mic_in.record(block_size)  # float32, range [-1, 1]
++                reference_audio = getattr(mic_in, "reference_audio", None)
+                 mic_vol_scalar = max(0.1, min(1.0, state.mic_volume / 100.0))
+ 
+                 # Build per-channel byte arrays.  Channel 0 is the primary
+@@ -711,14 +648,35 @@ def process_audio(
+                 agc = state.preferences.mic_auto_gain or 0
+                 ns = state.preferences.mic_noise_suppression or 0
+ 
+-                if agc > 0 or ns > 0:
++                far_end_active = bool(
++                    getattr(state.music_player, "far_end_active", False)
++                    or getattr(state.tts_player, "far_end_active", False)
++                )
++                use_aec = reference_audio is not None and far_end_active
++                now = time.monotonic()
++                if now >= next_audio_status:
++                    capture_status = getattr(mic_in, "status", None)
++                    if callable(capture_status):
++                        frontend_status = capture_status()
++                        frontend_status["playback_aec_active"] = use_aec
++                        state.tater_audio_frontend = frontend_status
++                    next_audio_status = now + 1.0
++                if agc > 0 or ns > 0 or use_aec:
+                     if webrtc is None:
+                         webrtc = WebRTCProcessor(agc_level=agc, ns_level=ns)
+                     else:
+                         webrtc.update_settings(agc, ns)
+-                    audio_chunk = webrtc.process(audio_chunk)
++                    audio_chunk = webrtc.process(
++                        audio_chunk,
++                        reference_audio=reference_audio,
++                        echo_cancellation=use_aec,
++                    )
+                     if not audio_chunk:
+                         continue
++                elif webrtc is not None:
++                    # Restore the unmodified microphone path immediately when
++                    # local playback stops and AGC/NS are disabled.
++                    webrtc.set_echo_cancellation(False)
+ 
+                 if state.satellite is None or not hasattr(state.satellite, "_is_streaming_audio"):
+                     continue
+diff --git a/linux_voice_assistant/api_server.py b/linux_voice_assistant/api_server.py
+index 6c892befa..9bbc09249 100644
+--- a/linux_voice_assistant/api_server.py
++++ b/linux_voice_assistant/api_server.py
+@@ -8,7 +8,6 @@ from collections.abc import Iterable
+ from typing import TYPE_CHECKING, Optional
+ 
+ # pylint: disable=no-name-in-module
+-from aioesphomeapi._frame_helper.packets import make_plain_text_packets
+ from aioesphomeapi.api_pb2 import (  # type: ignore[attr-defined]
+     AuthenticationRequest,
+     AuthenticationResponse,
+@@ -78,16 +77,9 @@ class APIServer(asyncio.Protocol):
+             self.send_messages(msgs)
+ 
+     def send_messages(self, msgs: Iterable[message.Message]):
+-        if self._writelines is None or not msgs:
+-            return
+-
+-        packets = [(PROTO_TO_MESSAGE_TYPE[msg.__class__], msg.SerializeToString()) for msg in msgs]
+-        packet_bytes = make_plain_text_packets(packets)
+-        if self._loop is not None and self._loop_thread_id is not None and threading.get_ident() != self._loop_thread_id:
+-            self._loop.call_soon_threadsafe(self._writelines, packet_bytes)
+-            return
+-
+-        self._writelines(packet_bytes)
++        # Tater native carries responses over its outbound WebSocket. The
++        # production image has no legacy TCP listener or packet sender.
++        return
+ 
+     def connection_made(self, transport) -> None:
+         self._transport = transport
+diff --git a/linux_voice_assistant/peripheral_api.py b/linux_voice_assistant/peripheral_api.py
+index 5eff9532d..0b66b4bac 100644
+--- a/linux_voice_assistant/peripheral_api.py
++++ b/linux_voice_assistant/peripheral_api.py
+@@ -31,7 +31,7 @@ Feedback events emitted by LVA
+               Emitted when the HA TCP connection is lost.
+               Connected leds with peripheral containers should
+               show a red twinkle / "no connection" animation and keep retrying
+-              until they see a ``zeroconf`` event with status "connected".
++              until they see a ``connection`` event with status "connected".
+               NOTE: if LVA itself is not running the peripheral container will
+               see a WebSocket connection failure on its end — that is also
+               a "disconnected" condition to handle with the same animation.
+@@ -45,7 +45,7 @@ Feedback events emitted by LVA
+                         voice pipeline announcements — those use tts_speaking.
+   volume_changed        data: {"volume": 0.0–1.0}
+   volume_muted          data: {"muted": true/false}
+-  zeroconf              data: {"status": "getting_started" | "connected"}
++  connection            data: {"status": "getting_started" | "connected"}
+   light_command         data: {"object_id": str, "state": bool, "brightness": float,
+                               "red": float, "green": float, "blue": float, "effect": str}
+               Fires when HA changes a Light entity that a peripheral
+@@ -136,7 +136,7 @@ class LVAEvent(str, Enum):
+     MEDIA_PLAYER_PLAYING = "media_player_playing"
+     VOLUME_CHANGED = "volume_changed"
+     VOLUME_MUTED = "volume_muted"
+-    ZEROCONF = "zeroconf"
++    CONNECTION = "connection"
+     LIGHT_COMMAND = "light_command"
+     TOOL_CALL = "tool_call"
+     SETTINGS = "settings"
+diff --git a/linux_voice_assistant/webrtc.py b/linux_voice_assistant/webrtc.py
+index f6e943e92..f7c7cfbb8 100644
+--- a/linux_voice_assistant/webrtc.py
++++ b/linux_voice_assistant/webrtc.py
+@@ -7,10 +7,12 @@ class WebRTCProcessor:
+     def __init__(self, agc_level: int = 0, ns_level: int = 0):
+         from webrtc_noise_gain import AudioProcessor  # type: ignore[import-untyped]
+ 
+-        self.apm = AudioProcessor(agc_level, ns_level)
++        self.apm = AudioProcessor(agc_level, ns_level, False)
+         self.agc_level = agc_level
+         self.ns_level = ns_level
++        self.echo_cancellation = False
+         self._buffer = bytearray()
++        self._reference_buffer = bytearray()
+         self.FRAME_SIZE_BYTES = 320  # 160 samples * 2 bytes (16-bit PCM)
+ 
+     def update_settings(self, agc_level: int, ns_level: int):
+@@ -19,22 +21,51 @@ class WebRTCProcessor:
+             from webrtc_noise_gain import AudioProcessor
+ 
+             _LOGGER.debug("Updating WebRTC settings: Gain=%s, NS=%s", agc_level, ns_level)
+-            self.apm = AudioProcessor(agc_level, ns_level)
++            self.apm = AudioProcessor(agc_level, ns_level, self.echo_cancellation)
+             self.agc_level = agc_level
+             self.ns_level = ns_level
+ 
+-    def process(self, raw_bytes: bytes) -> bytes:
++    def set_echo_cancellation(self, enabled: bool) -> None:
++        enabled = bool(enabled)
++        if self.echo_cancellation == enabled:
++            return
++        self.apm.SetEchoCancellation(enabled)
++        self.echo_cancellation = enabled
++        # Discard fractional near/far-end frames together at both edges of a
++        # playback session. This prevents a partial pre-playback microphone
++        # frame from being paired with a new playback reference as well as
++        # stale frames carrying into a later session.
++        self._buffer.clear()
++        self._reference_buffer.clear()
++
++    def process(
++        self,
++        raw_bytes: bytes,
++        *,
++        reference_audio: bytes | None = None,
++        echo_cancellation: bool = False,
++    ) -> bytes:
+         """
+         Buffer and process audio.
+         Returns processed bytes (may be shorter than input if buffering).
+         """
++        echo_cancellation = bool(echo_cancellation and reference_audio is not None)
++        self.set_echo_cancellation(echo_cancellation)
+         self._buffer.extend(raw_bytes)
++        if echo_cancellation:
++            self._reference_buffer.extend(reference_audio or b"")
+         processed_chunks: list[bytes] = []
+ 
+-        while len(self._buffer) >= self.FRAME_SIZE_BYTES:
++        while len(self._buffer) >= self.FRAME_SIZE_BYTES and (
++            (not echo_cancellation) or len(self._reference_buffer) >= self.FRAME_SIZE_BYTES
++        ):
+             frame = bytes(self._buffer[: self.FRAME_SIZE_BYTES])
+             del self._buffer[: self.FRAME_SIZE_BYTES]  # drain in-place
+ 
++            if echo_cancellation:
++                reference_frame = bytes(self._reference_buffer[: self.FRAME_SIZE_BYTES])
++                del self._reference_buffer[: self.FRAME_SIZE_BYTES]
++                self.apm.ProcessReverse10ms(reference_frame)
+             result = self.apm.Process10ms(frame)
+             processed_chunks.append(result.audio)
+ 
+diff --git a/linux_voice_assistant/satellite.py b/linux_voice_assistant/satellite.py
+index 8101a2af1..f7d0a3a8e 100644
+--- a/linux_voice_assistant/satellite.py
++++ b/linux_voice_assistant/satellite.py
+@@ -1277,7 +1277,7 @@ class VoiceSatelliteProtocol(APIServer):
+             _LOGGER.debug("All entity states sent after connect")
+ 
+             # Notify peripherals that Home Assistant is now connected
+-            self._emit(LVAEvent.ZEROCONF, {"status": "connected"})
++            self._emit(LVAEvent.CONNECTION, {"status": "connected"})
+ 
+     # ------------------------------------------------------------------
+     # External wake word download
+diff --git a/linux_voice_assistant/tater_native.py b/linux_voice_assistant/tater_native.py
+index ca06c3447..1ec6de887 100644
+--- a/linux_voice_assistant/tater_native.py
++++ b/linux_voice_assistant/tater_native.py
+@@ -850,7 +850,7 @@ class TaterNativeClient:
+         self._native_timers.connected()
+         self.features.connected()
+         self.sendspin.start()
+-        self.satellite._emit(LVAEvent.ZEROCONF, {"status": "connected"})  # pylint: disable=protected-access
++        self.satellite._emit(LVAEvent.CONNECTION, {"status": "connected"})  # pylint: disable=protected-access
+         _LOGGER.info(
+             "Connected to Tater native satellite API selector=%s device_id=%s board=%s room=%s",
+             ack_payload.get("selector") or f"native:{self.device_id}",
+diff --git a/linux_voice_assistant/mpv_player.py b/linux_voice_assistant/mpv_player.py
+index 50fb307fc..2efe8e3e5 100644
+--- a/linux_voice_assistant/mpv_player.py
++++ b/linux_voice_assistant/mpv_player.py
+@@ -184,6 +184,11 @@ class MpvMediaPlayer:
+         state = self._player.state()
+         return state in (PlayerState.PLAYING, PlayerState.PAUSED, PlayerState.LOADING)
+ 
++    @property
++    def far_end_active(self) -> bool:
++        """True only while audio is genuinely being rendered to the speaker."""
++        return self._player.state() == PlayerState.PLAYING
++
+     def set_volume(self, volume: float) -> None:
+         """
+         Set playback volume.
+diff --git a/pyproject.toml b/pyproject.toml
+index bca2acfe1..60ca44bca 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -1,16 +1,17 @@
+ [build-system]
+-requires = ["setuptools>=62.3", "setuptools-scm>=8"]
++requires = ["setuptools>=62.3"]
+ build-backend = "setuptools.build_meta"
+ 
+ [project]
+ name        = "linux-voice-assistant"
++version     = "1.1.13.post1"
+ license     = {text = "Apache-2.0"}
+-description = "Linux voice assistant for Tater native satellites and Home Assistant ESPHome"
+-readme      = "README.md"
++description = "Tater-native Linux voice satellite runtime"
++readme      = {text = "Tater-native Linux voice satellite runtime.", content-type = "text/plain"}
+ authors     = [
+-    {name = "The Home Assistant Authors", email = "hello@home-assistant.io"}
++    {name = "Tater Contributors"}
+ ]
+-keywords    = ["home", "assistant", "voice", "esphome", "linux", "tater"]
++keywords    = ["tater", "voice", "satellite", "linux"]
+ classifiers = [
+     "Development Status :: 3 - Alpha",
+     "Intended Audience :: Developers",
+@@ -22,16 +23,13 @@ classifiers = [
+ ]
+ requires-python = ">=3.11.0"
+ dependencies = [
+-    "aioesphomeapi==45.3.1",
+     "netifaces2==0.0.22",
+     "soundcard<1",
+     "numpy>=2,<3",
+     "pymicro-wakeword>=2,<3",
+     "pyopen-wakeword>=1,<2",
+     "python-mpv>=1,<2",
+-    "zeroconf<1",
+     "getmac<1",
+-    "types-protobuf",
+     "websockets==12",
+     "bleak>=0.21.1,<2; sys_platform == 'linux'",
+     "webrtc-noise-gain>=1,<2",
+@@ -55,7 +53,6 @@ linux-voice-assistant = "linux_voice_assistant.__main__:run"
+ 
+ [project.urls]
+ "Source Code" = "https://github.com/TaterTotterson/Tater-Linux-Satellite"
+-"Upstream" = "https://github.com/OHF-Voice/linux-voice-assistant"
+ 
+ [tool.setuptools]
+ platforms = ["any"]
+diff --git a/linux_voice_assistant/peripheral_api.py b/linux_voice_assistant/peripheral_api.py
+--- a/linux_voice_assistant/peripheral_api.py
++++ b/linux_voice_assistant/peripheral_api.py
+@@ -269,7 +269,7 @@
+                 "data": {
+                     "muted": state.muted,
+                     "volume": round(state.volume, 3),
+-                    "ha_connected": state.connected,
++                    "tater_connected": state.connected,
+                     "last_stt_text": self._last_stt_text,
+                     "last_tts_text": self._last_tts_text,
+                     "settings": dict(state.native_settings),

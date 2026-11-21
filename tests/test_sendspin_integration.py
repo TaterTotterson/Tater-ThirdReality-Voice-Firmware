@@ -3,7 +3,6 @@
 from pathlib import Path
 import unittest
 
-
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = ROOT / "buildroot/package/thirdreality/sendspin-client"
 
@@ -15,7 +14,9 @@ def _check_sendspin_package_is_enabled_and_pinned() -> None:
     assert "BR2_PACKAGE_SENDSPIN_CLIENT=y" in defconfig
     assert "github,Sendspin,sendspin-cpp-cli" in package
     assert "github,Sendspin,sendspin-cpp" in package
-    assert "SENDSPIN_CLIENT_VERSION = 05f99441f6a1255a1becf3cf4ab65eead11d63d8" in package
+    assert (
+        "SENDSPIN_CLIENT_VERSION = 05f99441f6a1255a1becf3cf4ab65eead11d63d8" in package
+    )
     assert "SENDSPIN_CLIENT_NOISE_C_VERSION" in package
     assert "SENDSPIN_CLI_WITH_PULSE=ON" in package
     assert "BUILD_SHARED_LIBS=OFF" in package
@@ -46,7 +47,7 @@ def _check_legacy_music_assistant_noise_handshake_is_accepted() -> None:
 def _check_music_assistant_player_schema_is_emitted() -> None:
     patch = (PACKAGE / "0004-match-aiosendspin-9-1-1-player-wire.patch").read_text()
 
-    assert 'methods_list.add<JsonObject>()' in patch
+    assert "methods_list.add<JsonObject>()" in patch
     assert 'method_obj["method"]' in patch
     assert "desc.method != SendspinPairMethod::PAIRING_PSK" in patch
     assert 'commands.add("volume")' in patch
@@ -96,9 +97,9 @@ def _check_tater_runtime_no_longer_advertises_legacy_media_sync() -> None:
         / "buildroot/package/thirdreality/tater-linux-satellite/files/tater_features.py"
     ).read_text()
 
-    assert '"sendspin_player": True' in runtime
+    assert "sendspin_player=True" in runtime
     assert '"synchronized_media_sessions"' not in runtime
-    assert '"audio_session_version"' not in runtime
+    assert 'client.capabilities.pop("audio_session_version"' in runtime
     assert "def _start_media(" not in runtime
     assert "def _prepare_media(" not in runtime
     assert "def _commit_media(" not in runtime

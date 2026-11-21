@@ -14,6 +14,8 @@ import unittest
 from unittest import mock
 
 
+from script.check_shared_runtime import get_test_runtime
+
 ROOT = Path(__file__).resolve().parents[1]
 FEATURES_PATH = (
     ROOT
@@ -41,7 +43,7 @@ class _PackageWakeWord:
 
 
 package = types.ModuleType("linux_voice_assistant")
-package.__path__ = [str(FEATURES_PATH.parent)]
+package.__path__ = [str(FEATURES_PATH.parent), str(get_test_runtime())]
 peripheral = types.ModuleType("linux_voice_assistant.peripheral_api")
 peripheral.LVAEvent = _Event
 models = types.ModuleType("linux_voice_assistant.models")
@@ -51,12 +53,15 @@ sys.modules.setdefault("linux_voice_assistant", package)
 sys.modules.setdefault("linux_voice_assistant.peripheral_api", peripheral)
 sys.modules.setdefault("linux_voice_assistant.models", models)
 spec = importlib.util.spec_from_file_location(
-    "linux_voice_assistant.tater_features", FEATURES_PATH
+    "linux_voice_assistant.shared_features", get_test_runtime() / "shared_features.py"
 )
 assert spec is not None and spec.loader is not None
 tater_features = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = tater_features
 spec.loader.exec_module(tater_features)
+
+from linux_voice_assistant import tater_features as hardware
+
 
 
 class _Player:
@@ -218,6 +223,7 @@ class _Client:
         self.frames = []
         self.binary_frames = []
         self.connected = True
+        self.capabilities = {"persistent_media_sessions": True, "audio_session_version": 1}
         self._loop = None
 
     def _submit_frame(self, frame):
@@ -231,10 +237,10 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.original_settings_path = tater_features._SETTINGS_PATH
-        self.original_ota_path = tater_features._OTA_PATH
+        self.original_ota_path = hardware._OTA_PATH
         self.original_wake_sound_dir = tater_features._TATER_WAKE_SOUND_DIR
         tater_features._SETTINGS_PATH = Path(self.temporary.name) / "settings.json"
-        tater_features._OTA_PATH = Path(self.temporary.name) / "software.swu"
+        hardware._OTA_PATH = Path(self.temporary.name) / "software.swu"
         tater_features._TATER_WAKE_SOUND_DIR = Path(self.temporary.name) / "wake_sounds"
         tater_features._TATER_WAKE_SOUND_DIR.mkdir()
         (tater_features._TATER_WAKE_SOUND_DIR / "blip2.wav").write_bytes(
@@ -242,12 +248,12 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
         )
         self.client = _Client()
         self.client._loop = asyncio.get_running_loop()
-        self.manager = tater_features.TaterFeatureManager(self.client)
+        self.manager = hardware.TaterFeatureManager(self.client)
 
     async def asyncTearDown(self) -> None:
         await self.manager.close()
         tater_features._SETTINGS_PATH = self.original_settings_path
-        tater_features._OTA_PATH = self.original_ota_path
+        hardware._OTA_PATH = self.original_ota_path
         tater_features._TATER_WAKE_SOUND_DIR = self.original_wake_sound_dir
         self.temporary.cleanup()
 
@@ -472,6 +478,8 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual((threshold, patience), (0.90, 2))
         self.assertNotIn("audio_session_version", self.manager.capabilities)
+        self.assertNotIn("audio_session_version", self.client.capabilities)
+        self.assertNotIn("persistent_media_sessions", self.client.capabilities)
 
     async def test_timer_start_list_and_cancel_round_trip(self) -> None:
         self.assertTrue(
@@ -665,7 +673,7 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
         restarted_client.state.preferences.wake_word_1_sensitivity = 242.0 / 255.0
         restarted_client.state.wake_word_1_threshold = 242.0 / 255.0
         restarted_client._loop = asyncio.get_running_loop()
-        restarted = tater_features.TaterFeatureManager(restarted_client)
+        restarted = hardware.TaterFeatureManager(restarted_client)
         try:
             restarted.connected()
             restarted.handle_message(
@@ -1361,7 +1369,7 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
                 self.close()
 
         with mock.patch.object(
-            tater_features,
+            hardware,
             "urlopen",
             return_value=_Response(firmware),
         ):
@@ -1372,12 +1380,12 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(actual_sha256, expected_sha256)
-        self.assertEqual(tater_features._OTA_PATH.read_bytes(), firmware)
-        self.assertFalse(tater_features._OTA_PATH.with_suffix(".swu.part").exists())
+        self.assertEqual(hardware._OTA_PATH.read_bytes(), firmware)
+        self.assertFalse(hardware._OTA_PATH.with_suffix(".swu.part").exists())
 
     async def test_ota_download_rejects_hash_mismatch_without_replacing_image(self) -> None:
         firmware = b"tampered-s420-update"
-        tater_features._OTA_PATH.write_bytes(b"previous-known-good-update")
+        hardware._OTA_PATH.write_bytes(b"previous-known-good-update")
 
         class _Response(io.BytesIO):
             def __init__(self, data: bytes) -> None:
@@ -1391,7 +1399,7 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
                 self.close()
 
         with mock.patch.object(
-            tater_features,
+            hardware,
             "urlopen",
             return_value=_Response(firmware),
         ):
@@ -1403,10 +1411,10 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
                 )
 
         self.assertEqual(
-            tater_features._OTA_PATH.read_bytes(),
+            hardware._OTA_PATH.read_bytes(),
             b"previous-known-good-update",
         )
-        self.assertFalse(tater_features._OTA_PATH.with_suffix(".swu.part").exists())
+        self.assertFalse(hardware._OTA_PATH.with_suffix(".swu.part").exists())
 
     async def test_ota_arms_recovery_after_verified_download(self) -> None:
         digest = "a" * 64
@@ -1425,7 +1433,7 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
             asyncio,
             "sleep",
             new=mock.AsyncMock(),
-        ), mock.patch.object(tater_features.subprocess, "Popen") as reboot:
+        ), mock.patch.object(hardware.subprocess, "Popen") as reboot:
             await self.manager._run_ota(
                 {
                     "url": "https://updates.tater.test/s420.swu",
@@ -1444,14 +1452,14 @@ class TaterFeatureTests(unittest.IsolatedAsyncioTestCase):
             "/usr/bin/swupdate",
             "-G",
             "-k",
-            str(tater_features._SWUPDATE_KEY),
+            str(hardware._SWUPDATE_KEY),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
         reboot.assert_called_once_with(
             ["/sbin/reboot"],
-            stdout=tater_features.subprocess.DEVNULL,
-            stderr=tater_features.subprocess.DEVNULL,
+            stdout=hardware.subprocess.DEVNULL,
+            stderr=hardware.subprocess.DEVNULL,
         )
         self.assertEqual(self._messages("ota.status")[-1]["payload"]["status"], "rebooting")
         self.assertEqual(self._messages("ota.status")[-1]["payload"]["progress"], 92)

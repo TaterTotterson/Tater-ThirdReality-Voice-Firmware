@@ -10,7 +10,9 @@ from unittest.mock import AsyncMock
 ROOT = Path(__file__).resolve().parents[1]
 DIRECTORY = ROOT / "linux_voice_assistant"
 if not DIRECTORY.exists():
-    DIRECTORY = ROOT / "buildroot/package/thirdreality/tater-linux-satellite/files"
+    from script.check_shared_runtime import get_test_runtime
+
+    DIRECTORY = get_test_runtime()
 try:
     import bleak
     import dbus_fast

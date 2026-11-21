@@ -51,6 +51,5 @@ if [ "$MODE" = "--report" ]; then
     exit 0
 fi
 
-sed -i.bak "s/^TATER_LINUX_SATELLITE_VERSION = .*/TATER_LINUX_SATELLITE_VERSION = $LATEST/" "$PACKAGE_MK"
-rm -f "$PACKAGE_MK.bak"
+python3 "$ROOT_DIR/script/check_shared_runtime.py" --advance "$LATEST"
 echo "Updated Tater Linux source: $CURRENT -> $LATEST"

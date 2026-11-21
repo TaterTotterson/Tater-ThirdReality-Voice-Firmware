@@ -8,7 +8,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = ROOT / "linux_voice_assistant/bluetooth_proxy.py"
 if not MODULE_PATH.exists():
-    MODULE_PATH = ROOT / "buildroot/package/thirdreality/tater-linux-satellite/files/bluetooth_proxy.py"
+    from script.check_shared_runtime import get_test_runtime
+
+    MODULE_PATH = get_test_runtime() / "bluetooth_proxy.py"
 SPEC = importlib.util.spec_from_file_location("demand_proxy", MODULE_PATH)
 module = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(module)
