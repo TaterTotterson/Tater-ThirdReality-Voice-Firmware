@@ -48,6 +48,12 @@ jobs:
           git fetch --no-tags --depth=1 origin "$BUILD_SUPPORT_COMMIT"
           git restore --source="$BUILD_SUPPORT_COMMIT" --worktree -- \
             buildroot/package/thirdreality/onnxruntime-aarch64
+          if grep -Fq 'TATER_LINUX_SATELLITE_VERSION = 6b48d96df8a325a71c8ce8e831b5eb07e712f3f9' \
+              buildroot/package/thirdreality/tater-linux-satellite/tater-linux-satellite.mk; then
+            git restore --source="$BUILD_SUPPORT_COMMIT" --worktree -- \
+              buildroot/package/thirdreality/tater-linux-satellite/0002-fix-static-python-package-version.patch \
+              script/check_shared_runtime.py
+          fi
           # Older releases need their original runtime-specific build repair.
           # New shared-runtime releases keep the source/checks from their tag.
           if grep -Fq 'TATER_LINUX_SATELLITE_VERSION = beb3ff6a81888e18ab603db3c3d42a3b89692c65' \
@@ -59,6 +65,10 @@ jobs:
               script/check_tater_patches.sh
             rm -f buildroot/package/thirdreality/tater-linux-satellite/0001-support-live-satellite-name-and-room.patch
           fi
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
       - name: Validate release inputs
         run: |
@@ -74,7 +84,14 @@ jobs:
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
 
       - name: Verify complete runtime patch set
-        run: bash script/check_tater_patches.sh
+        run: |
+          if [ -f script/check_shared_runtime.py ]; then
+            # Match the build frontend/backend versions in Buildroot.
+            python3 -m pip install build==1.0.3 setuptools==69.0.3 wheel==0.40.0
+            bash script/check_tater_patches.sh --wheel
+          else
+            bash script/check_tater_patches.sh
+          fi
 
       - name: Free disk space
         run: |
@@ -113,7 +130,7 @@ jobs:
               echo
               echo "## Build Recovery"
               echo
-              echo "Rebuilt the existing ${RELEASE_TAG} source ($(git rev-parse HEAD)) with build fixes from ${GITHUB_SHA}: the verified, original ONNX Runtime 1.22.0 archive and the corrected order of the live name/room patch. The firmware version and tag are unchanged."
+              echo "Rebuilt the existing ${RELEASE_TAG} source ($(git rev-parse HEAD)) with compatible build and packaging fixes from ${GITHUB_SHA}. The firmware version and tag are unchanged."
             } >> "$RELEASE_DIR/RELEASE_NOTES.md"
           fi
           echo "RELEASE_DIR=$RELEASE_DIR" >> "$GITHUB_ENV"

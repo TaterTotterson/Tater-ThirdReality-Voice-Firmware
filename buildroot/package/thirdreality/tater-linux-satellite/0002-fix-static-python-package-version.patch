@@ -1,0 +1,18 @@
+From: TaterTotterson <tater@tatertotterson.com>
+Subject: [PATCH] Do not also declare the static package version as dynamic
+
+The S420 adapter supplies a fixed version and removes setuptools-scm.
+PEP 621 forbids declaring the same field as both static and dynamic;
+setuptools 69 rejects it before the runtime wheel can be built.
+
+diff --git a/pyproject.toml b/pyproject.toml
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -36,7 +36,6 @@ dependencies = [
+     "bleak>=0.21.1,<2; sys_platform == 'linux'",
+     "webrtc-noise-gain>=1,<2",
+ ]
+-dynamic = ["version"]
+ 
+ [project.optional-dependencies]
+ onnx = ["onnxruntime>=1.22,<2"]

@@ -1,5 +1,8 @@
 # 0.2.28 - 2026-11-21
 
+- Fix the runtime wheel packaging failure caused by declaring its Python
+  package version as both static and dynamic. CI now builds the wheel with
+  Buildroot's Python packaging tools before starting the full firmware build.
 - Build directly from the published shared Tater Linux Satellite runtime.
   Remove the separate shared Python copies and the superseded backport patches.
 - Use the Native/Echo wake-boundary model and preserve early command audio

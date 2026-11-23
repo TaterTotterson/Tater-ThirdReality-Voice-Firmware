@@ -18,11 +18,18 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
       - name: Validate firmware structure
         run: python3 script/validate_firmware.py
 
       - name: Verify complete runtime patch set
-        run: bash script/check_tater_patches.sh
+        run: |
+          # Match the build frontend/backend versions in Buildroot.
+          python3 -m pip install build==1.0.3 setuptools==69.0.3 wheel==0.40.0
+          bash script/check_tater_patches.sh --wheel
 
       - name: Run bridge unit tests
         run: python3 -m unittest discover -s tests -v

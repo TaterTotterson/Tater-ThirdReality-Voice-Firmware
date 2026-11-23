@@ -10,8 +10,10 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
+import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = ROOT / "buildroot/package/thirdreality/tater-linux-satellite"
@@ -124,6 +126,37 @@ def get_test_runtime():
     return Path(_test_directory.name) / "linux_voice_assistant"
 
 
+def build_runtime_wheel(source):
+    """Exercise the same PEP 517 packaging step used by Buildroot."""
+    with tempfile.TemporaryDirectory(prefix="tater-s420-wheel-") as work:
+        subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "build",
+                "--no-isolation",
+                "--wheel",
+                "--outdir",
+                work,
+                str(source),
+            ],
+            check=True,
+        )
+        wheels = list(Path(work).glob("*.whl"))
+        if len(wheels) != 1:
+            raise ValueError("The shared runtime must produce exactly one wheel")
+        with zipfile.ZipFile(wheels[0]) as wheel:
+            for name in (
+                "linux_voice_assistant/tater_native.py",
+                "linux_voice_assistant/wake_boundary.py",
+                "linux_voice_assistant/shared_features.py",
+                "linux_voice_assistant/tater_features.py",
+                "linux_voice_assistant/s420_audio.py",
+            ):
+                if name not in wheel.namelist():
+                    raise ValueError(f"Runtime wheel is missing {name}")
+
+
 def advance_source(version):
     """Validate a new published source before keeping its pin/checksums."""
     if not re.fullmatch(r"[0-9a-f]{40}", version):
@@ -202,6 +235,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("archive", nargs="?", type=Path)
     parser.add_argument(
+        "--wheel",
+        action="store_true",
+        help="also build the runtime wheel (requires Buildroot's Python build tools)",
+    )
+    parser.add_argument(
         "--advance",
         metavar="COMMIT",
         help="update the pin/provenance only if its hardware patches compile",
@@ -215,6 +253,8 @@ def main():
         return
     with tempfile.TemporaryDirectory(prefix="tater-s420-runtime-") as work:
         prepare_runtime(Path(work), args.archive)
+        if args.wheel:
+            build_runtime_wheel(Path(work))
     print(
         f"Published shared runtime patches, installs and compiles for {source_version()}."
     )
