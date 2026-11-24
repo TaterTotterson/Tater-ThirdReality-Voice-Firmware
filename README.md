@@ -64,6 +64,14 @@ The everyday device path is also in place:
 - selectable microWakeWord, ONNX openWakeWord, or NanoWakeWord CNN/GRU
   detection, plus MWW+OWW and MWW+NWW confirmation modes on the same
   beamformed microphone stream with model-provided calibration
+- **speak without pausing:** a matching wake-boundary model helps preserve
+  commands spoken immediately after the wake phrase, such as
+  “Hey Tater, turn on the lights.”
+- **recommended wake setup:** use **dual mode (MWW + OWW or MWW + NWW)** for
+  fully on-device false-wake prevention. Both detectors must agree on the same
+  wake phrase; this check needs no STT service
+- **MWW-only setups:** enable **STT wake verification** in Tater or the Home
+  Assistant bridge for false-wake prevention through your configured STT service
 - playback-gated WebRTC AEC from the S420 codec loopback, with unchanged mic
   gain and automatic fallback to the existing mono capture path
 - live wake sensitivity and a `tv_nearby` candidate profile that requires the
