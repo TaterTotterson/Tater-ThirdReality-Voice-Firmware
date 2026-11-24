@@ -1,10 +1,13 @@
 """Source adoption checks against the runtime actually installed by S420."""
 
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
+import importlib.util
 import json
 from pathlib import Path
 import shutil
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -31,6 +34,7 @@ class SharedRuntimeSourceTests(unittest.TestCase):
     def test_shared_modules_come_from_the_pinned_source(self):
         runtime = shared.get_test_runtime()
         for name in (
+            "atomic_file.py",
             "tater_oww_onnx.py",
             "wake_boundary.py",
             "bluetooth_proxy.py",
@@ -48,6 +52,33 @@ class SharedRuntimeSourceTests(unittest.TestCase):
         )
         self.assertIn("wake_preroll_end", (runtime / "tater_native.py").read_text())
         self.assertIn("Tater-Sendspin", (runtime / "sendspin.py").read_text())
+
+    def test_installed_atomic_writer_handles_overlapping_downloads(self):
+        spec = importlib.util.spec_from_file_location(
+            "s420_atomic_file", shared.get_test_runtime() / "atomic_file.py"
+        )
+        writer = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(writer)
+        barrier = threading.Barrier(2)
+        replace = writer.os.replace
+
+        def publish(source, target):
+            barrier.wait(timeout=5)
+            replace(source, target)
+
+        with tempfile.TemporaryDirectory() as work:
+            target = Path(work) / "wake.onnx"
+            payloads = (b"first-model" * 1024, b"second-model" * 1024)
+            with mock.patch.object(writer.os, "replace", side_effect=publish):
+                with ThreadPoolExecutor(max_workers=2) as workers:
+                    pending = [
+                        workers.submit(writer.write_bytes_atomic, target, payload)
+                        for payload in payloads
+                    ]
+                    for future in pending:
+                        future.result(timeout=10)
+            self.assertIn(target.read_bytes(), payloads)
+            self.assertEqual(list(target.parent.iterdir()), [target])
 
     def test_incompatible_update_restores_pin_and_checksums(self):
         version = shared.source_version()

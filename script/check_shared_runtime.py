@@ -147,6 +147,7 @@ def build_runtime_wheel(source):
             raise ValueError("The shared runtime must produce exactly one wheel")
         with zipfile.ZipFile(wheels[0]) as wheel:
             for name in (
+                "linux_voice_assistant/atomic_file.py",
                 "linux_voice_assistant/tater_native.py",
                 "linux_voice_assistant/wake_boundary.py",
                 "linux_voice_assistant/shared_features.py",

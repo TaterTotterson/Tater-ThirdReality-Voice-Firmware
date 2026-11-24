@@ -1,8 +1,6 @@
-- Release ThirdReality S420 firmware `0.2.28` using the shared Tater Linux Satellite `1.1.13-tater5` runtime.
-- Add the Native/Echo wake-boundary model and ordered audio markers. Keep early command audio captured during wake verification, the wake sound, and conversation setup; preserve audio when a matching boundary is unavailable.
-- Build shared wake engines, native voice, timers, Bluetooth, Sendspin control, and audio features directly from the published Linux source. Remove duplicate Python modules and the superseded shared-feature backports.
-- Keep S420 playback-reference AEC, LEDs, buttons, provisioning, signed OTA, and its managed Sendspin player in the hardware adapter. Preserve Wi-Fi, pairing, name, room, wake choices, and audio settings.
-- Retain calibrated microWakeWord, ONNX openWakeWord, NanoWakeWord CNN/GRU and dual detection; on-demand Bluetooth discovery and GATT connections; audio scenes, speech ducking, and playback recovery.
-- Verify the pinned source archive and license checksums. Validate the installed runtime and restore the previous source pin if a future hardware patch or Python compilation check fails.
-- Includes the release build repairs since `0.2.27`: the bundled verified ONNX Runtime archive and the live name/room patch ordering correction, now superseded by the shared runtime.
-- Existing Tater S420 devices can install the signed system OTA while preserving settings. First installation and recovery use the matching factory image. Runtime tests and Buildroot checks pass; physical S420 testing remains pending.
+- Update ThirdReality S420 firmware to `0.2.29`, using the shared Tater Linux Satellite `1.2.2` runtime pinned to its exact published commit.
+- Fix custom wake-model activation when startup and incoming settings trigger overlapping downloads. Give each download its own temporary file and publish only complete files; failed writes preserve the previous model.
+- Include the fix for custom microWakeWord, openWakeWord, NanoWakeWord, and wake-boundary model and bundle caches. Verify the new atomic-file helper is included in the firmware's runtime wheel.
+- Clarify setup and settings through Tater or the Home Assistant bridge, wake-boundary support, and recommended dual-detector wake confirmation.
+- Existing Tater S420 devices can install the signed OTA while preserving Wi-Fi, pairing, name, room, wake choices, and audio settings. First installation and recovery use the matching factory image.
+- Physical S420 verification of this update remains pending.

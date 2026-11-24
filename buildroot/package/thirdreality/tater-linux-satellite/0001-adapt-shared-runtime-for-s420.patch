@@ -489,7 +489,7 @@ index bca2acfe1..60ca44bca 100644
  
  [project]
  name        = "linux-voice-assistant"
-+version     = "1.1.13.post1"
++version     = "1.2.2"
  license     = {text = "Apache-2.0"}
 -description = "Linux voice assistant for Tater native satellites and Home Assistant ESPHome"
 -readme      = "README.md"

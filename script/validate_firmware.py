@@ -5,6 +5,7 @@ from pathlib import Path
 import hashlib
 import re
 import sys
+import tomllib
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -319,7 +320,14 @@ def main() -> int:
     require('loop.create_server(' not in runtime_main, "Legacy TCP listener remains enabled", errors)
     require('make_plain_text_packets' not in runtime_api, "Legacy packet sender remains enabled", errors)
     require('"tater_connected": state.connected' in (runtime / "peripheral_api.py").read_text(), "Peripheral snapshot uses legacy connection naming", errors)
-    require('version     = "1.1.13.post1"' in runtime_metadata, "Firmware package metadata is not fixed", errors)
+    project_metadata = tomllib.loads(runtime_metadata)["project"]
+    require(
+        project_metadata.get("version")
+        == (runtime.parent / "version.txt").read_text().strip()
+        and "version" not in project_metadata.get("dynamic", []),
+        "Firmware package metadata does not match the pinned runtime version",
+        errors,
+    )
     require('description = "Tater-native Linux voice satellite runtime"' in runtime_metadata, "Firmware metadata is missing", errors)
     for capability in (
         "live_settings",

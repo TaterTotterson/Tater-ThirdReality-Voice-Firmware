@@ -47,7 +47,7 @@ class ReleaseNotesTests(unittest.TestCase):
             notes = output.read_text(encoding="utf-8")
             self.assertIn("# Tater ThirdReality S420 Firmware 0.2.27", notes)
             self.assertIn("## What's Changed", notes)
-            self.assertIn("wake-boundary model", notes)
+            self.assertIn("overlapping downloads", notes)
             self.assertIn("shared Tater Linux Satellite", notes)
             self.assertIn("signed `ota` artifact", notes)
             self.assertIn("**With Log**", notes)
