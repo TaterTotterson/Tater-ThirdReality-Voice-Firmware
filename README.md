@@ -12,6 +12,10 @@ This is an independent firmware fork that retains the vendor's Amlogic board
 support while replacing its voice application with
 [Tater Linux Satellite](https://github.com/TaterTotterson/Tater-Linux-Satellite).
 
+Pair and manage the satellite through **Tater** or the
+[Home Assistant bridge](https://github.com/TaterTotterson/Tater-Home-Assistant-Satellites),
+including wake words, volume, name, and room settings.
+
 The hardware is not a Pine64 board. It is an Amlogic A113X/S420 Linux appliance
 with 256 MB RAM and 512 MB NAND. It belongs in the same broad embedded-Linux
 satellite category, but it requires ThirdReality's kernel, bootloader, device
@@ -56,7 +60,8 @@ boot the speaker, and verify the installed Tater runtime.
 The everyday device path is also in place:
 
 - first-boot `Tater-Setup-XXXX` hotspot and captive portal
-- authenticated Tater pairing with persistent Wi-Fi, room, name, and settings
+- authenticated pairing with Tater or the HA bridge, with persistent Wi-Fi,
+  room, name, and settings
 - live name and room changes from Tater, the HA bridge, or HA's device editor
   through the updated bridge, saved in `/data/conf/tater.json` without resetting
   Wi-Fi, credentials, or the stable device ID
@@ -75,10 +80,12 @@ The everyday device path is also in place:
 - playback-gated WebRTC AEC from the S420 codec loopback, with unchanged mic
   gain and automatic fallback to the existing mono capture path
 - live wake sensitivity and a `tv_nearby` candidate profile that requires the
-  Tater verifier but safely fails open when verification is unavailable
-- optional Tater STT wake verification with observe, enforce, and fail-open modes
-- Tater-controlled wake models, thresholds, and wake-sound settings, including
-  the complete built-in sound catalog, No Sound, and cached custom WAV URLs
+  configured STT verifier but safely fails open when verification is unavailable
+- optional STT wake verification through Tater or the HA bridge, with observe,
+  enforce, and fail-open modes
+- wake models, thresholds, and wake-sound settings managed through Tater or the
+  HA bridge, including the complete built-in sound catalog, No Sound, and
+  cached custom WAV URLs
 - ThirdReality LEDs, Home/Tap buttons, volume controls, and microphone mute
 - on-demand BLE discovery and a BlueZ GATT proxy using the onboard BCM43438,
   with discovery paused during voice, streamed playback, and OTA work
@@ -88,7 +95,8 @@ The everyday device path is also in place:
   mixing, with stalled-playback recovery and optional TTS wake-word barge-in
 - animated listening, thinking, tool-call, and replying LED states using the
   selected Tater color, brightness, and animation style
-- signed OTA from Tater, with routine updates preserving pairing and settings
+- signed OTA from Tater or the HA bridge, with routine updates preserving
+  pairing and settings
 - serial logs and full factory recovery through the debug board
 
 The debug board is required only for a clean factory install or recovery; it is
@@ -141,8 +149,8 @@ recovery instructions, see [Flashing the S420](docs/FLASHING.md).
 
 On first boot, the speaker creates an open `Tater-Setup-XXXX` Wi-Fi network.
 Join it and use the captive portal (or open `http://192.168.4.1`) to enter the
-2.4 GHz Wi-Fi credentials, Tater server, pairing code or token, room, and
-speaker name. The setup network has no internet route and disappears after the
+2.4 GHz Wi-Fi credentials, controller URL from Tater or the HA bridge, pairing
+code or token, room, and speaker name. The setup network has no internet route and disappears after the
 speaker saves its configuration and restarts.
 
 Bluetooth provisioning and Improv are not included in the production image.
